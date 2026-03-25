@@ -1,0 +1,46 @@
+name: GensouMarket
+version: '${version}'
+main: net.scarletphantasy.gensouMarket.GensouMarket
+api-version: '1.21'
+prefix: 幻想集市
+depend: [Vault]
+commands:
+  gensoumarket:
+    description: 幻想集市主命令
+    aliases: [gmarket]
+    usage: /<command> help
+    permission: gensoumarket.use
+permissions:
+  gensoumarket.use:
+    description: 使用幻想集市基本功能
+    default: true
+  gensoumarket.sell:
+    description: 在全球市场上架物品
+    default: true
+  gensoumarket.buy:
+    description: 在全球市场购买物品
+    default: true
+  gensoumarket.auction:
+    description: 使用拍卖功能
+    default: true
+  gensoumarket.shop:
+    description: 使用服务器商店
+    default: true
+  gensoumarket.recycle:
+    description: 使用回收站
+    default: true
+  gensoumarket.trade:
+    description: 使用面对面交易功能
+    default: true
+  gensoumarket.admin:
+    description: 幻想集市管理员权限
+    default: op
+  gensoumarket.admin.reload:
+    description: 重载配置
+    default: op
+  gensoumarket.admin.shop.edit:
+    description: 编辑服务器商店物品
+    default: op
+  gensoumarket.admin.recycle.edit:
+    description: 编辑回收站物品
+    default: op

@@ -1,0 +1,17 @@
+# ==============================
+# 幻想集市 - 服务器商店物品配置
+# ==============================
+# 服务器卖给玩家的物品，价格固定
+#
+# 格式:
+#   物品ID:
+#     material: Bukkit Material 名称
+#     buy-price: 玩家从商店购买的价格（固定）
+
+items:
+  diamond:
+    material: DIAMOND
+    buy-price: 1000.0
+  iron_ingot:
+    material: IRON_INGOT
+    buy-price: 50.0

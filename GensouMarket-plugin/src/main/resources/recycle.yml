@@ -1,0 +1,18 @@
+# ==============================
+# 幻想集市 - 回收站物品配置
+# ==============================
+# 服务器从玩家手中回收的物品
+# 实际回收价格会根据动态定价系统自动调整
+#
+# 格式:
+#   物品ID:
+#     material: Bukkit Material 名称
+#     recycle-price: 基础回收价格
+
+items:
+  diamond:
+    material: DIAMOND
+    recycle-price: 500.0
+  iron_ingot:
+    material: IRON_INGOT
+    recycle-price: 25.0
