@@ -71,10 +71,6 @@ public class RecycleManager {
         return null;
     }
 
-    public RecycleItem getItem(String id) {
-        return recycleItems.get(id);
-    }
-
     public boolean recycleItem(Player player, RecycleItem recycleItem, int amount) {
         if (!config.isRecycleEnabled()) {
             MessageUtil.send(player, "&c回收站未启用！");
@@ -108,9 +104,7 @@ public class RecycleManager {
         priceEngine.onPlayerRecycle(recycleItem, amount);
 
         // 异步写DB
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            storage.saveRecycleData(recycleItem);
-        });
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveRecycleData(recycleItem));
 
         MessageUtil.send(player, Component.text("成功回收 ", NamedTextColor.GREEN)
                 .append(Component.text(amount + "x ", NamedTextColor.YELLOW))
@@ -148,10 +142,6 @@ public class RecycleManager {
                 }
             }
         }
-    }
-
-    public PriceEngine getPriceEngine() {
-        return priceEngine;
     }
 
     public MarketFluctuation getMarketFluctuation() {

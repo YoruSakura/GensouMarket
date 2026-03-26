@@ -4,8 +4,8 @@ import org.bukkit.Material;
 
 public class RecycleItem {
 
-    private String id;
-    private Material material;
+    private final String id;
+    private final Material material;
     private double baseRecyclePrice;
     private int totalRecycled;
     private double recycleMultiplier;

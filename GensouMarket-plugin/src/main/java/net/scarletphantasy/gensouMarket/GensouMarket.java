@@ -50,8 +50,8 @@ public final class GensouMarket extends JavaPlugin {
             storage.initialize();
             getLogger().info("数据存储已初始化 (" + configManager.getStorageType() + ")");
         } catch (Exception e) {
-            getLogger().severe("无法初始化数据存储！");
-            e.printStackTrace();
+            getLogger().severe("无法初始化数据存储！" + e.getMessage());
+            getLogger().log(java.util.logging.Level.SEVERE, "存储初始化异常", e);
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
@@ -66,13 +66,16 @@ public final class GensouMarket extends JavaPlugin {
 
         tradeManager = new TradeManager(this);
 
-        // 清理上次遗留的拍卖（处理正常关服和崩溃两种情况）
-        auctionManager.cancelAllActiveAuctions();
+        // 恢复活跃拍卖的定时任务
+        auctionManager.restoreActiveAuctions();
 
         // 注册命令
         CommandManager cmdManager = new CommandManager(this);
-        getCommand("gensoumarket").setExecutor(cmdManager);
-        getCommand("gensoumarket").setTabCompleter(cmdManager);
+        var cmd = getCommand("gensoumarket");
+        if (cmd != null) {
+            cmd.setExecutor(cmdManager);
+            cmd.setTabCompleter(cmdManager);
+        }
 
         // 注册事件监听
         getServer().getPluginManager().registerEvents(new GuiListener(this), this);

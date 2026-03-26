@@ -33,7 +33,7 @@ public class TradeManager {
      * 发起交易请求
      */
     public void sendRequest(Player sender, Player target) {
-        if (!plugin.getConfigManager().isTradeEnabled()) {
+        if (plugin.getConfigManager().isTradeEnabled()) {
             MessageUtil.send(sender, "&c面对面交易功能已禁用！");
             return;
         }
@@ -393,8 +393,6 @@ public class TradeManager {
         public UUID getSenderUuid() { return senderUuid; }
         public UUID getTargetUuid() { return targetUuid; }
         public String getSenderName() { return senderName; }
-        public String getTargetName() { return targetName; }
-        public long getCreateTime() { return createTime; }
         public BukkitTask getTimeoutTask() { return timeoutTask; }
         public void setTimeoutTask(BukkitTask timeoutTask) { this.timeoutTask = timeoutTask; }
     }
@@ -425,8 +423,6 @@ public class TradeManager {
 
         public UUID getPlayerAUuid() { return playerAUuid; }
         public UUID getPlayerBUuid() { return playerBUuid; }
-        public String getPlayerAName() { return playerAName; }
-        public String getPlayerBName() { return playerBName; }
         public boolean isEnded() { return ended; }
         public void setEnded(boolean ended) { this.ended = ended; }
 
@@ -445,20 +441,12 @@ public class TradeManager {
             return isPlayerA(uuid) ? playerBName : playerAName;
         }
 
-        public String getPlayerName(UUID uuid) {
-            return isPlayerA(uuid) ? playerAName : playerBName;
-        }
-
         public ItemStack[] getMyItems(UUID uuid) {
             return isPlayerA(uuid) ? playerAItems : playerBItems;
         }
 
         public ItemStack[] getOpponentItems(UUID uuid) {
             return isPlayerA(uuid) ? playerBItems : playerAItems;
-        }
-
-        public Inventory getMyInventory(UUID uuid) {
-            return isPlayerA(uuid) ? playerAInventory : playerBInventory;
         }
 
         public Inventory getOpponentInventory(UUID uuid) {

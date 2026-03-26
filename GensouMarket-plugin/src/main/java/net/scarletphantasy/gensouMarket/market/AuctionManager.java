@@ -12,9 +12,9 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class AuctionManager {
 
@@ -22,6 +22,7 @@ public class AuctionManager {
     private final StorageProvider storage;
     private final ConfigManager config;
     private final VaultHook vault;
+    private final Map<Integer, Integer> scheduledTasks = new ConcurrentHashMap<>();
 
     public AuctionManager(GensouMarket plugin) {
         this.plugin = plugin;
@@ -54,7 +55,7 @@ public class AuctionManager {
         double tax = startingPrice * config.getListingTax();
         double listingFee = startingPrice * config.getAuctionListingFeeRate();
         double totalUpfront = tax + listingFee;
-        if (!vault.has(seller, totalUpfront)) {
+        if (vault.has(seller, totalUpfront)) {
             MessageUtil.send(seller, "&c你没有足够的金币支付上架费用 (" + MessageUtil.formatMoney(totalUpfront) + ")！");
             return;
         }
@@ -76,6 +77,19 @@ public class AuctionManager {
         // 异步写DB
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             int id = storage.saveAuction(auction);
+            auction.setId(id);
+
+            // 注册定时结算任务
+            long delayTicks = durationMinutes * 60 * 20L;
+            int taskId = Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, () -> {
+                Auction dbAuction = storage.getAuction(id);
+                if (dbAuction != null && dbAuction.getStatus() == Auction.Status.ACTIVE) {
+                    endAuctionAsync(dbAuction);
+                }
+                scheduledTasks.remove(id);
+            }, delayTicks).getTaskId();
+            scheduledTasks.put(id, taskId);
+
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (seller.isOnline()) {
                     String feeMsg = listingFee > 0
@@ -103,10 +117,7 @@ public class AuctionManager {
                     return;
                 }
                 if (auction.hasEnded()) {
-                    // 异步处理结束
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        endAuctionAsync(auction);
-                    });
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> endAuctionAsync(auction));
                     MessageUtil.send(bidder, "&c该拍卖已结束！");
                     return;
                 }
@@ -129,7 +140,7 @@ public class AuctionManager {
                     return;
                 }
 
-                if (!vault.has(bidder, amount)) {
+                if (vault.has(bidder, amount)) {
                     MessageUtil.send(bidder, "&c你没有足够的金币！");
                     return;
                 }
@@ -184,11 +195,13 @@ public class AuctionManager {
         auction.setStatus(Auction.Status.ENDED);
         storage.updateAuction(auction);
 
+        // 清理定时任务
+        scheduledTasks.remove(auction.getId());
+
         if (auction.hasBidder()) {
             double tax = auction.getCurrentPrice() * config.getTransactionTax();
             double sellerReceive = auction.getCurrentPrice() - tax;
 
-            // 检查卖家是否在线需要在主线程，但邮件可以先准备
             MailEntry sellerMail = new MailEntry();
             sellerMail.setPlayerUuid(auction.getSellerUuid());
             sellerMail.setMoney(sellerReceive);
@@ -217,20 +230,13 @@ public class AuctionManager {
                 boolean winnerHandled = false;
                 Player winner = Bukkit.getPlayer(auction.getHighestBidderUuid());
                 if (winner != null && winner.isOnline()) {
-                    ItemStack item = auction.getItemStack();
-                    if (item != null) {
-                        HashMap<Integer, ItemStack> overflow = winner.getInventory().addItem(item);
-                        if (!overflow.isEmpty()) {
-                            for (ItemStack drop : overflow.values()) {
-                                winner.getWorld().dropItemNaturally(winner.getLocation(), drop);
-                            }
-                        }
+                    if (MessageUtil.hasInventorySpace(winner)) {
+                        MessageUtil.giveItem(winner, auction.getItemStack());
+                        MessageUtil.send(winner, "&a你赢得了拍卖 #" + auction.getId() + "！");
+                        winnerHandled = true;
                     }
-                    MessageUtil.send(winner, "&a你赢得了拍卖 #" + auction.getId() + "！");
-                    winnerHandled = true;
                 }
 
-                // 异步保存未处理的邮件
                 final boolean needSellerMail = !sellerHandled;
                 final boolean needWinnerMail = !winnerHandled;
                 if (needSellerMail || needWinnerMail) {
@@ -239,9 +245,11 @@ public class AuctionManager {
                         if (needWinnerMail) storage.saveMail(winnerMail);
                     });
                 }
+                if (needWinnerMail && winner != null && winner.isOnline()) {
+                    MessageUtil.send(winner, "&a你赢得了拍卖 #" + auction.getId() + "！背包已满，物品已发送至邮箱");
+                }
             });
         } else {
-            // 无人竞拍
             MailEntry mail = new MailEntry();
             mail.setPlayerUuid(auction.getSellerUuid());
             mail.setItemData(auction.getItemData());
@@ -249,22 +257,19 @@ public class AuctionManager {
             mail.setMessage("拍卖 #" + auction.getId() + " 无人竞拍");
 
             Bukkit.getScheduler().runTask(plugin, () -> {
+                boolean handled = false;
                 Player seller = Bukkit.getPlayer(auction.getSellerUuid());
                 if (seller != null && seller.isOnline()) {
-                    ItemStack item = auction.getItemStack();
-                    if (item != null) {
-                        HashMap<Integer, ItemStack> overflow = seller.getInventory().addItem(item);
-                        if (!overflow.isEmpty()) {
-                            for (ItemStack drop : overflow.values()) {
-                                seller.getWorld().dropItemNaturally(seller.getLocation(), drop);
-                            }
-                        }
+                    if (MessageUtil.hasInventorySpace(seller)) {
+                        MessageUtil.giveItem(seller, auction.getItemStack());
+                        MessageUtil.send(seller, "&e你的拍卖 #" + auction.getId() + " 无人竞拍，物品已退回！");
+                        handled = true;
+                    } else {
+                        MessageUtil.send(seller, "&e你的拍卖 #" + auction.getId() + " 无人竞拍，背包已满，物品已发送至邮箱！");
                     }
-                    MessageUtil.send(seller, "&e你的拍卖 #" + auction.getId() + " 无人竞拍，物品已退回！");
-                } else {
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                        storage.saveMail(mail);
-                    });
+                }
+                if (!handled) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveMail(mail));
                 }
             });
         }
@@ -312,18 +317,15 @@ public class AuctionManager {
                 }
 
                 // 退还物品给卖家
-                ItemStack item = auction.getItemStack();
-                if (item != null) {
-                    HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(item);
-                    if (!overflow.isEmpty()) {
-                        for (ItemStack drop : overflow.values()) {
-                            player.getWorld().dropItemNaturally(player.getLocation(), drop);
-                        }
-                        MessageUtil.send(player, "&e背包已满，物品已掉落在你脚下！");
-                    }
-                }
+                MessageUtil.giveItem(player, auction.getItemStack());
 
                 MessageUtil.send(player, "&a已取消拍卖 #" + auctionId + "，手续费不退还");
+
+                // 取消定时任务
+                Integer taskId = scheduledTasks.remove(auctionId);
+                if (taskId != null) {
+                    Bukkit.getScheduler().cancelTask(taskId);
+                }
 
                 // 异步写DB
                 final MailEntry finalBidderMail = bidderMail;
@@ -374,6 +376,35 @@ public class AuctionManager {
 
         if (!active.isEmpty()) {
             plugin.getLogger().info("已取消 " + active.size() + " 个遗留拍卖并退还物品/金额");
+        }
+    }
+
+    /**
+     * 启动时恢复活跃拍卖的定时任务。
+     */
+    public void restoreActiveAuctions() {
+        List<Auction> active = storage.getActiveAuctions();
+        long now = System.currentTimeMillis();
+
+        for (Auction auction : active) {
+            long remaining = auction.getEndTime() - now;
+            if (remaining <= 0) {
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> endAuctionAsync(auction));
+            } else {
+                long delayTicks = remaining / 50;
+                int taskId = Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, () -> {
+                    Auction dbAuction = storage.getAuction(auction.getId());
+                    if (dbAuction != null && dbAuction.getStatus() == Auction.Status.ACTIVE) {
+                        endAuctionAsync(dbAuction);
+                    }
+                    scheduledTasks.remove(auction.getId());
+                }, delayTicks).getTaskId();
+                scheduledTasks.put(auction.getId(), taskId);
+            }
+        }
+
+        if (!active.isEmpty()) {
+            plugin.getLogger().info("已恢复 " + active.size() + " 个活跃拍卖的定时任务");
         }
     }
 }

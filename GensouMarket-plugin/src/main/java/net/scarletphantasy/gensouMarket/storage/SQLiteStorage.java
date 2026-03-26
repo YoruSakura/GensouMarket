@@ -7,9 +7,12 @@ import org.bukkit.Material;
 import java.io.File;
 import java.sql.*;
 import java.util.*;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class SQLiteStorage implements StorageProvider {
 
+    private static final Logger LOGGER = Logger.getLogger("GensouMarket");
     private final File dataFolder;
     private Connection connection;
 
@@ -31,60 +34,60 @@ public class SQLiteStorage implements StorageProvider {
             stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS market_listings (" +
                 "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                "seller_uuid VARCHAR(36) NOT NULL," +
-                "seller_name VARCHAR(16) NOT NULL," +
+                "seller_uuid TEXT NOT NULL," +
+                "seller_name TEXT NOT NULL," +
                 "item_data TEXT NOT NULL," +
-                "price DOUBLE NOT NULL," +
-                "list_time BIGINT NOT NULL," +
-                "expire_time BIGINT NOT NULL," +
-                "status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE'," +
-                "buyer_uuid VARCHAR(36)," +
-                "buyer_name VARCHAR(16))"
+                "price REAL NOT NULL," +
+                "list_time INTEGER NOT NULL," +
+                "expire_time INTEGER NOT NULL," +
+                "status TEXT NOT NULL DEFAULT 'ACTIVE'," +
+                "buyer_uuid TEXT," +
+                "buyer_name TEXT)"
             );
             stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS auctions (" +
                 "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                "seller_uuid VARCHAR(36) NOT NULL," +
-                "seller_name VARCHAR(16) NOT NULL," +
+                "seller_uuid TEXT NOT NULL," +
+                "seller_name TEXT NOT NULL," +
                 "item_data TEXT NOT NULL," +
-                "starting_price DOUBLE NOT NULL," +
-                "current_price DOUBLE NOT NULL," +
-                "highest_bidder_uuid VARCHAR(36)," +
-                "highest_bidder_name VARCHAR(16)," +
-                "start_time BIGINT NOT NULL," +
-                "end_time BIGINT NOT NULL," +
-                "status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE')"
+                "starting_price REAL NOT NULL," +
+                "current_price REAL NOT NULL," +
+                "highest_bidder_uuid TEXT," +
+                "highest_bidder_name TEXT," +
+                "start_time INTEGER NOT NULL," +
+                "end_time INTEGER NOT NULL," +
+                "status TEXT NOT NULL DEFAULT 'ACTIVE')"
             );
             stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS shop_data (" +
-                "item_id VARCHAR(64) PRIMARY KEY," +
-                "material VARCHAR(64) NOT NULL," +
-                "base_buy_price DOUBLE NOT NULL," +
-                "base_sell_price DOUBLE NOT NULL DEFAULT 0," +
+                "item_id TEXT PRIMARY KEY," +
+                "material TEXT NOT NULL," +
+                "base_buy_price REAL NOT NULL," +
+                "base_sell_price REAL NOT NULL DEFAULT 0," +
                 "total_bought INTEGER NOT NULL DEFAULT 0," +
                 "total_sold INTEGER NOT NULL DEFAULT 0," +
-                "buy_multiplier DOUBLE NOT NULL DEFAULT 1.0," +
-                "sell_multiplier DOUBLE NOT NULL DEFAULT 1.0," +
-                "last_update BIGINT NOT NULL)"
+                "buy_multiplier REAL NOT NULL DEFAULT 1.0," +
+                "sell_multiplier REAL NOT NULL DEFAULT 1.0," +
+                "last_update INTEGER NOT NULL)"
             );
             stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS recycle_data (" +
-                "item_id VARCHAR(64) PRIMARY KEY," +
-                "material VARCHAR(64) NOT NULL," +
-                "base_recycle_price DOUBLE NOT NULL," +
+                "item_id TEXT PRIMARY KEY," +
+                "material TEXT NOT NULL," +
+                "base_recycle_price REAL NOT NULL," +
                 "total_recycled INTEGER NOT NULL DEFAULT 0," +
-                "recycle_multiplier DOUBLE NOT NULL DEFAULT 1.0," +
-                "last_update BIGINT NOT NULL)"
+                "recycle_multiplier REAL NOT NULL DEFAULT 1.0," +
+                "last_update INTEGER NOT NULL)"
             );
             stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS player_mail (" +
                 "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-                "player_uuid VARCHAR(36) NOT NULL," +
+                "player_uuid TEXT NOT NULL," +
                 "item_data TEXT," +
-                "money DOUBLE NOT NULL DEFAULT 0," +
+                "money REAL NOT NULL DEFAULT 0," +
                 "message TEXT," +
-                "timestamp BIGINT NOT NULL," +
-                "claimed BOOLEAN NOT NULL DEFAULT 0)"
+                "timestamp INTEGER NOT NULL," +
+                "claimed INTEGER NOT NULL DEFAULT 0)"
             );
         }
     }
@@ -95,7 +98,9 @@ public class SQLiteStorage implements StorageProvider {
             if (connection != null && !connection.isClosed()) {
                 connection.close();
             }
-        } catch (SQLException ignored) {}
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 关闭连接失败", e);
+        }
     }
 
     // ---- Market Listings ----
@@ -120,7 +125,7 @@ public class SQLiteStorage implements StorageProvider {
                 }
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 保存上架物品失败", e);
         }
         return -1;
     }
@@ -135,7 +140,7 @@ public class SQLiteStorage implements StorageProvider {
             ps.setInt(4, listing.getId());
             ps.executeUpdate();
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 更新上架物品失败", e);
         }
     }
 
@@ -148,7 +153,7 @@ public class SQLiteStorage implements StorageProvider {
                 if (rs.next()) return mapListing(rs);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 获取上架物品失败", e);
         }
         return null;
     }
@@ -161,7 +166,7 @@ public class SQLiteStorage implements StorageProvider {
              ResultSet rs = stmt.executeQuery(sql)) {
             while (rs.next()) list.add(mapListing(rs));
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 获取活跃上架列表失败", e);
         }
         return list;
     }
@@ -176,7 +181,7 @@ public class SQLiteStorage implements StorageProvider {
                 while (rs.next()) list.add(mapListing(rs));
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 获取玩家上架列表失败", e);
         }
         return list;
     }
@@ -223,7 +228,7 @@ public class SQLiteStorage implements StorageProvider {
                 }
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 保存拍卖失败", e);
         }
         return -1;
     }
@@ -239,7 +244,7 @@ public class SQLiteStorage implements StorageProvider {
             ps.setInt(5, auction.getId());
             ps.executeUpdate();
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 更新拍卖失败", e);
         }
     }
 
@@ -252,7 +257,7 @@ public class SQLiteStorage implements StorageProvider {
                 if (rs.next()) return mapAuction(rs);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 获取拍卖失败", e);
         }
         return null;
     }
@@ -265,7 +270,7 @@ public class SQLiteStorage implements StorageProvider {
              ResultSet rs = stmt.executeQuery(sql)) {
             while (rs.next()) list.add(mapAuction(rs));
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 获取活跃拍卖列表失败", e);
         }
         return list;
     }
@@ -290,7 +295,6 @@ public class SQLiteStorage implements StorageProvider {
 
     private void migrateShopToRecycle() {
         try {
-            // 检查 recycle_data 是否为空，且 shop_data 是否有 sell 数据可迁移
             boolean recycleEmpty;
             try (Statement stmt = connection.createStatement();
                  ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM recycle_data")) {
@@ -299,35 +303,17 @@ public class SQLiteStorage implements StorageProvider {
             }
             if (!recycleEmpty) return;
 
-            int migrated = 0;
-            try (Statement stmt = connection.createStatement();
-                 ResultSet rs = stmt.executeQuery("SELECT * FROM shop_data WHERE base_sell_price > 0")) {
-                while (rs.next()) {
-                    String itemId = rs.getString("item_id");
-                    String material = rs.getString("material");
-                    double baseSellPrice = rs.getDouble("base_sell_price");
-                    int totalSold = rs.getInt("total_sold");
-                    double sellMultiplier = rs.getDouble("sell_multiplier");
-                    long lastUpdate = rs.getLong("last_update");
-
-                    String insertSql = "INSERT OR IGNORE INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update) VALUES (?,?,?,?,?,?)";
-                    try (PreparedStatement ps = connection.prepareStatement(insertSql)) {
-                        ps.setString(1, itemId);
-                        ps.setString(2, material);
-                        ps.setDouble(3, baseSellPrice);
-                        ps.setInt(4, totalSold);
-                        ps.setDouble(5, sellMultiplier);
-                        ps.setLong(6, lastUpdate);
-                        ps.executeUpdate();
-                        migrated++;
-                    }
+            String sql = "INSERT OR IGNORE INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update) " +
+                    "SELECT item_id, material, base_sell_price, total_sold, sell_multiplier, last_update " +
+                    "FROM shop_data WHERE base_sell_price > 0";
+            try (Statement stmt = connection.createStatement()) {
+                int migrated = stmt.executeUpdate(sql);
+                if (migrated > 0) {
+                    LOGGER.info("[GensouMarket] 已从 shop_data 迁移 " + migrated + " 个物品到 recycle_data");
                 }
             }
-            if (migrated > 0) {
-                System.out.println("[GensouMarket] 已从 shop_data 迁移 " + migrated + " 个物品到 recycle_data");
-            }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] shop_data 迁移失败", e);
         }
     }
 
@@ -348,14 +334,29 @@ public class SQLiteStorage implements StorageProvider {
             ps.setLong(9, item.getLastUpdate());
             ps.executeUpdate();
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 保存商店数据失败", e);
         }
     }
 
     @Override
     public void saveAllShopData(Map<String, ShopItem> items) {
-        for (ShopItem item : items.values()) {
-            saveShopData(item);
+        String sql = "INSERT OR REPLACE INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update) VALUES (?,?,?,?,?,?,?,?,?)";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            for (ShopItem item : items.values()) {
+                ps.setString(1, item.getId());
+                ps.setString(2, item.getMaterial().name());
+                ps.setDouble(3, item.getBaseBuyPrice());
+                ps.setDouble(4, 0);
+                ps.setInt(5, item.getTotalBought());
+                ps.setInt(6, 0);
+                ps.setDouble(7, 1.0);
+                ps.setDouble(8, 1.0);
+                ps.setLong(9, item.getLastUpdate());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 批量保存商店数据失败", e);
         }
     }
 
@@ -375,7 +376,7 @@ public class SQLiteStorage implements StorageProvider {
                 map.put(id, item);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 加载商店数据失败", e);
         }
         return map;
     }
@@ -394,14 +395,26 @@ public class SQLiteStorage implements StorageProvider {
             ps.setLong(6, item.getLastUpdate());
             ps.executeUpdate();
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 保存回收数据失败", e);
         }
     }
 
     @Override
     public void saveAllRecycleData(Map<String, RecycleItem> items) {
-        for (RecycleItem item : items.values()) {
-            saveRecycleData(item);
+        String sql = "INSERT OR REPLACE INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update) VALUES (?,?,?,?,?,?)";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            for (RecycleItem item : items.values()) {
+                ps.setString(1, item.getId());
+                ps.setString(2, item.getMaterial().name());
+                ps.setDouble(3, item.getBaseRecyclePrice());
+                ps.setInt(4, item.getTotalRecycled());
+                ps.setDouble(5, item.getRecycleMultiplier());
+                ps.setLong(6, item.getLastUpdate());
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 批量保存回收数据失败", e);
         }
     }
 
@@ -422,7 +435,7 @@ public class SQLiteStorage implements StorageProvider {
                 map.put(id, item);
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 加载回收数据失败", e);
         }
         return map;
     }
@@ -438,7 +451,7 @@ public class SQLiteStorage implements StorageProvider {
             ps.setDouble(3, entry.getMoney());
             ps.setString(4, entry.getMessage());
             ps.setLong(5, entry.getTimestamp());
-            ps.setBoolean(6, entry.isClaimed());
+            ps.setInt(6, entry.isClaimed() ? 1 : 0);
             ps.executeUpdate();
             try (ResultSet rs = ps.getGeneratedKeys()) {
                 if (rs.next()) {
@@ -448,7 +461,7 @@ public class SQLiteStorage implements StorageProvider {
                 }
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 保存邮件失败", e);
         }
         return -1;
     }
@@ -463,7 +476,7 @@ public class SQLiteStorage implements StorageProvider {
                 while (rs.next()) list.add(mapMail(rs));
             }
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 获取玩家邮件失败", e);
         }
         return list;
     }
@@ -475,7 +488,7 @@ public class SQLiteStorage implements StorageProvider {
             ps.setInt(1, id);
             ps.executeUpdate();
         } catch (SQLException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[SQLite] 删除邮件失败", e);
         }
     }
 
@@ -489,7 +502,7 @@ public class SQLiteStorage implements StorageProvider {
         m.setMoney(rs.getDouble("money"));
         m.setMessage(rs.getString("message"));
         m.setTimestamp(rs.getLong("timestamp"));
-        m.setClaimed(rs.getBoolean("claimed"));
+        m.setClaimed(rs.getInt("claimed") == 1);
         return m;
     }
 }

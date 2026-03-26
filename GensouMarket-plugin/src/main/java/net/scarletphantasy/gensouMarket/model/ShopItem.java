@@ -4,8 +4,8 @@ import org.bukkit.Material;
 
 public class ShopItem {
 
-    private String id;
-    private Material material;
+    private final String id;
+    private final Material material;
     private double baseBuyPrice;
     private int totalBought;
     private long lastUpdate;

@@ -47,35 +47,37 @@ public class MySQLStorage implements StorageProvider {
 
     @Override
     public void initialize() throws Exception {
-        HikariConfig hikariConfig = new HikariConfig();
-        hikariConfig.setJdbcUrl("jdbc:mysql://" + host + ":" + port + "/" + database +
-                "?useSSL=false&allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai");
-        hikariConfig.setUsername(username);
-        hikariConfig.setPassword(password);
-        hikariConfig.setDriverClassName("com.mysql.cj.jdbc.Driver");
-        hikariConfig.setMaximumPoolSize(10);
-        hikariConfig.setMinimumIdle(2);
-        hikariConfig.setConnectionTimeout(5000);
-        hikariConfig.setValidationTimeout(3000);
-        hikariConfig.setIdleTimeout(300000);
-        hikariConfig.setMaxLifetime(1800000);
-        hikariConfig.setKeepaliveTime(60000);
-        hikariConfig.setPoolName("GensouMarket-MySQL");
-
-        hikariConfig.addDataSourceProperty("connectTimeout", "5000");
-        hikariConfig.addDataSourceProperty("socketTimeout", "5000");
-        hikariConfig.addDataSourceProperty("tcpKeepAlive", "true");
-        hikariConfig.addDataSourceProperty("cachePrepStmts", "true");
-        hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
-        hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
-        hikariConfig.addDataSourceProperty("useServerPrepStmts", "true");
-
-        dataSource = new HikariDataSource(hikariConfig);
+        dataSource = new HikariDataSource(createHikariConfig());
 
         try (Connection conn = getConnection()) {
             createTables(conn);
             migrateShopToRecycle(conn);
         }
+    }
+
+    private HikariConfig createHikariConfig() {
+        HikariConfig cfg = new HikariConfig();
+        cfg.setJdbcUrl("jdbc:mysql://" + host + ":" + port + "/" + database +
+                "?useSSL=false&allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai");
+        cfg.setUsername(username);
+        cfg.setPassword(password);
+        cfg.setDriverClassName("com.mysql.cj.jdbc.Driver");
+        cfg.setMaximumPoolSize(10);
+        cfg.setMinimumIdle(2);
+        cfg.setConnectionTimeout(5000);
+        cfg.setValidationTimeout(3000);
+        cfg.setIdleTimeout(300000);
+        cfg.setMaxLifetime(1800000);
+        cfg.setKeepaliveTime(60000);
+        cfg.setPoolName("GensouMarket-MySQL");
+        cfg.addDataSourceProperty("connectTimeout", "5000");
+        cfg.addDataSourceProperty("socketTimeout", "5000");
+        cfg.addDataSourceProperty("tcpKeepAlive", "true");
+        cfg.addDataSourceProperty("cachePrepStmts", "true");
+        cfg.addDataSourceProperty("prepStmtCacheSize", "250");
+        cfg.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+        cfg.addDataSourceProperty("useServerPrepStmts", "true");
+        return cfg;
     }
 
     private void createTables(Connection conn) throws SQLException {

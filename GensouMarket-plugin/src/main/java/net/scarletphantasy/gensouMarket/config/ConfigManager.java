@@ -144,7 +144,7 @@ public class ConfigManager {
     }
 
     // ---- Trade ----
-    public boolean isTradeEnabled() { return config.getBoolean("trade.enabled", true); }
+    public boolean isTradeEnabled() { return !config.getBoolean("trade.enabled"); }
     public int getTradeRequestTimeout() { return config.getInt("trade.request-timeout", 30); }
     public double getTradeMaxDistance() { return config.getDouble("trade.max-distance", 10.0); }
     public int getTradeDistanceCheckInterval() { return config.getInt("trade.distance-check-interval", 20); }
@@ -166,6 +166,7 @@ public class ConfigManager {
             if (itemSec == null) continue;
 
             String materialName = itemSec.getString("material");
+            if (materialName == null) continue;
             Material material = Material.matchMaterial(materialName);
             if (material == null) {
                 plugin.getLogger().warning("商店配置: 无效的物品材质 " + materialName + " (ID: " + key + ")");
@@ -189,6 +190,7 @@ public class ConfigManager {
             if (itemSec == null) continue;
 
             String materialName = itemSec.getString("material");
+            if (materialName == null) continue;
             Material material = Material.matchMaterial(materialName);
             if (material == null) {
                 plugin.getLogger().warning("回收配置: 无效的物品材质 " + materialName + " (ID: " + key + ")");
@@ -217,8 +219,7 @@ public class ConfigManager {
         try {
             shopConfig.save(new File(plugin.getDataFolder(), "shop.yml"));
         } catch (IOException e) {
-            plugin.getLogger().severe("无法保存 shop.yml！");
-            e.printStackTrace();
+            plugin.getLogger().log(java.util.logging.Level.SEVERE, "无法保存 shop.yml！", e);
         }
     }
 
@@ -238,8 +239,7 @@ public class ConfigManager {
         try {
             recycleConfig.save(new File(plugin.getDataFolder(), "recycle.yml"));
         } catch (IOException e) {
-            plugin.getLogger().severe("无法保存 recycle.yml！");
-            e.printStackTrace();
+            plugin.getLogger().log(java.util.logging.Level.SEVERE, "无法保存 recycle.yml！", e);
         }
     }
 }

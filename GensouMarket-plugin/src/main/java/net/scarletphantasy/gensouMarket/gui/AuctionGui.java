@@ -1,10 +1,12 @@
 package net.scarletphantasy.gensouMarket.gui;
 
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.scarletphantasy.gensouMarket.GensouMarket;
 import net.scarletphantasy.gensouMarket.model.Auction;
 import net.scarletphantasy.gensouMarket.util.MessageUtil;
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
@@ -17,15 +19,16 @@ import java.util.List;
 public final class AuctionGui {
 
     private static final int PAGE_SIZE = 45;
+    private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacySection();
 
     private AuctionGui() {}
 
-    public static void openAuctions(GensouMarket plugin, Player player, int page) {
+    public static void openAuctions(@SuppressWarnings("unused") GensouMarket plugin, Player player, int page) {
         List<Auction> auctions = plugin.getAuctionManager().getActiveAuctions();
         openAuctions(plugin, player, auctions, page);
     }
 
-    public static void openAuctions(GensouMarket plugin, Player player, List<Auction> auctions, int page) {
+    public static void openAuctions(@SuppressWarnings("unused") GensouMarket plugin, Player player, List<Auction> auctions, int page) {
 
         GuiHolder holder = new GuiHolder(GuiHolder.GuiType.AUCTION_LIST);
         holder.setData("page", page);
@@ -33,7 +36,8 @@ public final class AuctionGui {
 
         int totalPages = Math.max(1, (int) Math.ceil((double) auctions.size() / PAGE_SIZE));
         Inventory inv = Bukkit.createInventory(holder, 54,
-                ChatColor.YELLOW + "拍卖行 " + ChatColor.GRAY + "(" + (page + 1) + "/" + totalPages + ")");
+                Component.text("拍卖行 ", NamedTextColor.YELLOW)
+                        .append(Component.text("(" + (page + 1) + "/" + totalPages + ")", NamedTextColor.GRAY)));
         holder.setInventory(inv);
 
         if (auctions.isEmpty()) {
@@ -47,19 +51,11 @@ public final class AuctionGui {
                 ItemStack display = auction.getItemStack() != null ? auction.getItemStack().clone() : new ItemStack(Material.BARRIER);
                 ItemMeta meta = display.getItemMeta();
                 if (meta != null) {
-                    List<String> lore = meta.getLore() != null ? new ArrayList<>(meta.getLore()) : new ArrayList<>();
-                    lore.add("");
-                    lore.add(MessageUtil.color("&6起拍价: &e" + MessageUtil.formatMoney(auction.getStartingPrice())));
-                    lore.add(MessageUtil.color("&6当前价: &e" + MessageUtil.formatMoney(auction.getCurrentPrice())));
-                    lore.add(MessageUtil.color("&7卖家: &f" + auction.getSellerName()));
-                    String bidder = auction.hasBidder() ? auction.getHighestBidderName() : "无";
-                    lore.add(MessageUtil.color("&7最高出价人: &f" + bidder));
-                    long remainMs = auction.getEndTime() - System.currentTimeMillis();
-                    lore.add(MessageUtil.color("&7剩余时间: &f" + formatTime(remainMs)));
-                    lore.add(MessageUtil.color("&7ID: &f#" + auction.getId()));
-                    lore.add("");
-                    lore.add(MessageUtil.color("&a点击查看详情/竞拍"));
-                    meta.setLore(lore);
+                    List<Component> lore = buildAuctionLore(meta, auction);
+                    lore.add(LEGACY.deserialize(MessageUtil.color("&7ID: &f#" + auction.getId())));
+                    lore.add(Component.empty());
+                    lore.add(LEGACY.deserialize(MessageUtil.color("&a点击查看详情/竞拍")));
+                    meta.lore(lore);
                     display.setItemMeta(meta);
                 }
                 inv.setItem(i - start, display);
@@ -81,13 +77,13 @@ public final class AuctionGui {
         player.openInventory(inv);
     }
 
-    public static void openAuctionDetail(GensouMarket plugin, Player player, Auction auction) {
+    public static void openAuctionDetail(@SuppressWarnings("unused") GensouMarket plugin, Player player, Auction auction) {
         GuiHolder holder = new GuiHolder(GuiHolder.GuiType.AUCTION_DETAIL);
         holder.setData("auctionId", auction.getId());
         holder.setData("auction", auction);
 
         Inventory inv = Bukkit.createInventory(holder, 54,
-                ChatColor.YELLOW + "拍卖详情 #" + auction.getId());
+                Component.text("拍卖详情 #" + auction.getId(), NamedTextColor.YELLOW));
         holder.setInventory(inv);
 
         // 上方区域填充黑色玻璃板
@@ -98,16 +94,8 @@ public final class AuctionGui {
         ItemStack display = auction.getItemStack() != null ? auction.getItemStack().clone() : new ItemStack(Material.BARRIER);
         ItemMeta meta = display.getItemMeta();
         if (meta != null) {
-            List<String> lore = meta.getLore() != null ? new ArrayList<>(meta.getLore()) : new ArrayList<>();
-            lore.add("");
-            lore.add(MessageUtil.color("&6起拍价: &e" + MessageUtil.formatMoney(auction.getStartingPrice())));
-            lore.add(MessageUtil.color("&6当前价: &e" + MessageUtil.formatMoney(auction.getCurrentPrice())));
-            lore.add(MessageUtil.color("&7卖家: &f" + auction.getSellerName()));
-            String bidder = auction.hasBidder() ? auction.getHighestBidderName() : "无";
-            lore.add(MessageUtil.color("&7最高出价人: &f" + bidder));
-            long remainMs = auction.getEndTime() - System.currentTimeMillis();
-            lore.add(MessageUtil.color("&7剩余时间: &f" + formatTime(remainMs)));
-            meta.setLore(lore);
+            List<Component> lore = buildAuctionLore(meta, auction);
+            meta.lore(lore);
             display.setItemMeta(meta);
         }
         inv.setItem(13, display);
@@ -147,6 +135,23 @@ public final class AuctionGui {
                 "&5+20%", Math.round(currentPrice * 1.20 * 100.0) / 100.0));
 
         player.openInventory(inv);
+    }
+
+    /**
+     * Builds the common auction lore lines (starting price, current price, seller, bidder, remaining time).
+     * Preserves any existing lore from the item's meta.
+     */
+    private static List<Component> buildAuctionLore(ItemMeta meta, Auction auction) {
+        List<Component> lore = meta.lore() != null ? new ArrayList<>(meta.lore()) : new ArrayList<>();
+        lore.add(Component.empty());
+        lore.add(LEGACY.deserialize(MessageUtil.color("&6起拍价: &e" + MessageUtil.formatMoney(auction.getStartingPrice()))));
+        lore.add(LEGACY.deserialize(MessageUtil.color("&6当前价: &e" + MessageUtil.formatMoney(auction.getCurrentPrice()))));
+        lore.add(LEGACY.deserialize(MessageUtil.color("&7卖家: &f" + auction.getSellerName())));
+        String bidder = auction.hasBidder() ? auction.getHighestBidderName() : "无";
+        lore.add(LEGACY.deserialize(MessageUtil.color("&7最高出价人: &f" + bidder)));
+        long remainMs = auction.getEndTime() - System.currentTimeMillis();
+        lore.add(LEGACY.deserialize(MessageUtil.color("&7剩余时间: &f" + formatTime(remainMs))));
+        return lore;
     }
 
     private static ItemStack createBidButton(Material material, String label, double bidAmount) {

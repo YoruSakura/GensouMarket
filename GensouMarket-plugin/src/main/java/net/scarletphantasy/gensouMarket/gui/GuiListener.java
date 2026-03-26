@@ -79,7 +79,7 @@ public class GuiListener implements Listener {
             case MARKET_BROWSE -> handleMarketBrowse(player, holder, slot, event);
             case SHOP -> handleShop(player, holder, slot, event);
             case RECYCLE -> handleRecycle(player, holder, slot, event);
-            case AUCTION_LIST -> handleAuctionList(player, holder, slot, event);
+            case AUCTION_LIST -> handleAuctionList(player, holder, slot);
             case AUCTION_DETAIL -> handleAuctionDetail(player, holder, slot);
         }
     }
@@ -280,22 +280,18 @@ public class GuiListener implements Listener {
 
     private void handleMainMenu(Player player, int slot) {
         switch (slot) {
-            case 10 -> {
-                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    List<MarketListing> listings = plugin.getMarketManager().getActiveListings();
-                    Bukkit.getScheduler().runTask(plugin, () -> {
-                        if (player.isOnline()) MarketGui.openMarketBrowse(plugin, player, listings, 0);
-                    });
+            case 10 -> Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                List<MarketListing> listings = plugin.getMarketManager().getActiveListings();
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) MarketGui.openMarketBrowse(plugin, player, listings, 0);
                 });
-            }
-            case 12 -> {
-                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    List<Auction> auctions = plugin.getAuctionManager().getActiveAuctions();
-                    Bukkit.getScheduler().runTask(plugin, () -> {
-                        if (player.isOnline()) AuctionGui.openAuctions(plugin, player, auctions, 0);
-                    });
+            });
+            case 12 -> Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                List<Auction> auctions = plugin.getAuctionManager().getActiveAuctions();
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (player.isOnline()) AuctionGui.openAuctions(plugin, player, auctions, 0);
                 });
-            }
+            });
             case 14 -> ShopGui.openShop(plugin, player, 0);
             case 16 -> RecycleGui.openRecycle(plugin, player, 0);
         }
@@ -345,7 +341,7 @@ public class GuiListener implements Listener {
     }
 
     @SuppressWarnings("unchecked")
-    private void handleAuctionList(Player player, GuiHolder holder, int slot, InventoryClickEvent event) {
+    private void handleAuctionList(Player player, GuiHolder holder, int slot) {
         int page = holder.getIntData("page", 0);
         List<Auction> auctions = (List<Auction>) holder.getData("auctions");
 
@@ -418,7 +414,7 @@ public class GuiListener implements Listener {
         }
 
         // 加价按钮区域: 45-48 (固定金额), 50-53 (百分比)
-        if (slot < 45 || slot > 53 || slot == 49) return;
+        if (slot < 45 || slot > 53) return;
 
         // 从 holder 缓存中获取当前价格用于计算竞拍金额
         // 实际竞拍时 placeBid 会异步读取最新数据验证
@@ -444,24 +440,22 @@ public class GuiListener implements Listener {
         plugin.getAuctionManager().placeBid(player, auctionId, bidAmount);
 
         // 延迟刷新详情页（等竞拍处理完）
-        Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                Auction updated = plugin.getStorage().getAuction(auctionId);
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (!player.isOnline()) return;
-                    if (updated != null && updated.getStatus() == Auction.Status.ACTIVE) {
-                        AuctionGui.openAuctionDetail(plugin, player, updated);
-                    } else {
-                        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                            List<Auction> auctions = plugin.getAuctionManager().getActiveAuctions();
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                if (player.isOnline()) AuctionGui.openAuctions(plugin, player, auctions, 0);
-                            });
+        Bukkit.getScheduler().runTaskLater(plugin, () -> Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            Auction updated = plugin.getStorage().getAuction(auctionId);
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) return;
+                if (updated != null && updated.getStatus() == Auction.Status.ACTIVE) {
+                    AuctionGui.openAuctionDetail(plugin, player, updated);
+                } else {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        List<Auction> auctions = plugin.getAuctionManager().getActiveAuctions();
+                        Bukkit.getScheduler().runTask(plugin, () -> {
+                            if (player.isOnline()) AuctionGui.openAuctions(plugin, player, auctions, 0);
                         });
-                    }
-                });
+                    });
+                }
             });
-        }, 5L);
+        }), 5L);
     }
 
     @SuppressWarnings("unchecked")

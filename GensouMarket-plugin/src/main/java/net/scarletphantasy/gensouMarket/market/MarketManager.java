@@ -41,7 +41,7 @@ public class MarketManager {
         }
 
         double tax = price * config.getListingTax();
-        if (!vault.has(seller, tax)) {
+        if (vault.has(seller, tax)) {
             MessageUtil.send(seller, "&c你没有足够的金币支付上架税 (" + MessageUtil.formatMoney(tax) + ")！");
             return;
         }
@@ -66,7 +66,7 @@ public class MarketManager {
                     MessageUtil.send(seller, "&c物品已变化，请重新操作！");
                     return;
                 }
-                if (!vault.has(seller, tax)) {
+                if (vault.has(seller, tax)) {
                     MessageUtil.send(seller, "&c你没有足够的金币支付上架税！");
                     return;
                 }
@@ -119,23 +119,12 @@ public class MarketManager {
 
                 listing.setStatus(MarketListing.Status.CANCELLED);
 
-                ItemStack item = listing.getItemStack();
-                if (item != null) {
-                    HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(item);
-                    if (!overflow.isEmpty()) {
-                        for (ItemStack drop : overflow.values()) {
-                            player.getWorld().dropItemNaturally(player.getLocation(), drop);
-                        }
-                        MessageUtil.send(player, "&e背包已满，物品已掉落在你脚下！");
-                    }
-                }
+                MessageUtil.giveItem(player, listing.getItemStack());
 
                 MessageUtil.send(player, "&a已成功下架物品 #" + listingId);
 
                 // 异步写DB
-                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    storage.updateListing(listing);
-                });
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.updateListing(listing));
             });
         });
     }
@@ -161,7 +150,7 @@ public class MarketManager {
                 double totalCost = listing.getPrice();
                 double tax = totalCost * config.getTransactionTax();
 
-                if (!vault.has(buyer, totalCost)) {
+                if (vault.has(buyer, totalCost)) {
                     MessageUtil.send(buyer, "&c你没有足够的金币！需要: " + MessageUtil.formatMoney(totalCost));
                     return;
                 }
@@ -175,16 +164,7 @@ public class MarketManager {
                 listing.setBuyerName(buyer.getName());
 
                 // 给买家物品
-                ItemStack item = listing.getItemStack();
-                if (item != null) {
-                    HashMap<Integer, ItemStack> overflow = buyer.getInventory().addItem(item);
-                    if (!overflow.isEmpty()) {
-                        for (ItemStack drop : overflow.values()) {
-                            buyer.getWorld().dropItemNaturally(buyer.getLocation(), drop);
-                        }
-                        MessageUtil.send(buyer, "&e背包已满，物品已掉落在你脚下！");
-                    }
-                }
+                MessageUtil.giveItem(buyer, listing.getItemStack());
 
                 // 给卖家钱
                 Player seller = Bukkit.getPlayer(listing.getSellerUuid());

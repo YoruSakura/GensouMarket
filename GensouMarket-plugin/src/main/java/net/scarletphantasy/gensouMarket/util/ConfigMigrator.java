@@ -54,7 +54,9 @@ public final class ConfigMigrator {
         // 备份旧配置
         String fileName = configFile.getName();
         File backupFile = new File(configFile.getParent(), fileName + ".bak");
-        if (backupFile.exists()) backupFile.delete();
+        if (backupFile.exists() && !backupFile.delete()) {
+            logger.warning("无法删除旧备份文件 " + backupFile.getName());
+        }
         if (!configFile.renameTo(backupFile)) {
             logger.severe("无法备份旧配置文件 " + fileName + "，迁移中止");
             return false;
@@ -65,9 +67,11 @@ public final class ConfigMigrator {
             merged.save(configFile);
         } catch (IOException e) {
             logger.severe("无法保存迁移后的配置文件 " + fileName);
-            e.printStackTrace();
+            logger.log(java.util.logging.Level.SEVERE, "保存迁移配置失败", e);
             // 尝试恢复备份
-            backupFile.renameTo(configFile);
+            if (!backupFile.renameTo(configFile)) {
+                logger.severe("无法恢复备份文件！");
+            }
             return false;
         }
 

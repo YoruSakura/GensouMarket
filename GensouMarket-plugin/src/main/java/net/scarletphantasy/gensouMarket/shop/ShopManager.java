@@ -60,10 +60,6 @@ public class ShopManager {
         return shopItems;
     }
 
-    public ShopItem getItem(String id) {
-        return shopItems.get(id);
-    }
-
     public boolean buyFromShop(Player player, String itemId, int amount) {
         if (!config.isShopEnabled()) {
             MessageUtil.send(player, "&c服务器商店未启用！");
@@ -81,7 +77,7 @@ public class ShopManager {
         double pricePerUnit = shopItem.getCurrentBuyPrice();
         double totalCost = pricePerUnit * amount;
 
-        if (!vault.has(player, totalCost)) {
+        if (vault.has(player, totalCost)) {
             MessageUtil.send(player, "&c你没有足够的金币！需要: &e" + MessageUtil.formatMoney(totalCost));
             return false;
         }
@@ -100,9 +96,7 @@ public class ShopManager {
         shopItem.addBought(amount);
 
         // 异步写DB
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            storage.saveShopData(shopItem);
-        });
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveShopData(shopItem));
 
         MessageUtil.send(player, Component.text("成功购买 ", NamedTextColor.GREEN)
                 .append(Component.text(amount + "x ", NamedTextColor.YELLOW))

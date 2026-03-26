@@ -57,26 +57,6 @@ public class MarketFluctuation {
         return clamp(fluctuation, config.getMinFluctuation(), config.getMaxFluctuation());
     }
 
-    /**
-     * 计算指定物品当前相对上一个周期的涨跌百分比。
-     *
-     * @param itemId    物品ID
-     * @param timeMillis 当前时间戳（毫秒）
-     * @return 涨跌百分比（正值=涨，负值=跌）
-     */
-    public double calculateChange(String itemId, long timeMillis) {
-        if (!config.isMarketFluctuationEnabled()) {
-            return 0.0;
-        }
-
-        long cycleMillis = config.getFluctuationCycleMinutes() * 60L * 1000L;
-        double current = calculate(itemId, timeMillis);
-        double previous = calculate(itemId, timeMillis - cycleMillis);
-
-        if (previous == 0.0) return 0.0;
-        return (current - previous) / previous * 100.0;
-    }
-
     private static double clamp(double value, double min, double max) {
         return Math.max(min, Math.min(max, value));
     }

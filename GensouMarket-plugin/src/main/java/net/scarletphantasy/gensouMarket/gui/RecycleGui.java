@@ -5,8 +5,10 @@ import net.scarletphantasy.gensouMarket.model.RecycleItem;
 import net.scarletphantasy.gensouMarket.shop.MarketFluctuation;
 import net.scarletphantasy.gensouMarket.util.ItemNameUtil;
 import net.scarletphantasy.gensouMarket.util.MessageUtil;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
@@ -23,7 +25,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class RecycleGui {
 
     private static final int PAGE_SIZE = 45;
-    private static final long REFRESH_INTERVAL_TICKS = 20L; // 1秒
+    private static final long REFRESH_INTERVAL_TICKS = 20L;
+    private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacyAmpersand();
 
     private static final Map<UUID, BukkitTask> refreshTasks = new ConcurrentHashMap<>();
 
@@ -39,7 +42,8 @@ public final class RecycleGui {
 
         int totalPages = Math.max(1, (int) Math.ceil((double) itemList.size() / PAGE_SIZE));
         Inventory inv = Bukkit.createInventory(holder, 54,
-                ChatColor.RED + "回收站 " + ChatColor.GRAY + "(" + (page + 1) + "/" + totalPages + ")");
+                Component.text("回收站 ", NamedTextColor.RED)
+                        .append(Component.text("(" + (page + 1) + "/" + totalPages + ")", NamedTextColor.GRAY)));
         holder.setInventory(inv);
 
         int start = page * PAGE_SIZE;
@@ -52,7 +56,6 @@ public final class RecycleGui {
             inv.setItem(i - start, buildDisplayItem(itemList.get(i), fluctuation, now, cycleMillis));
         }
 
-        // 导航栏
         ItemStack filler = MarketGui.createMenuItem(Material.GRAY_STAINED_GLASS_PANE, " ");
         for (int i = 45; i < 54; i++) inv.setItem(i, filler);
 
@@ -73,21 +76,20 @@ public final class RecycleGui {
         ItemMeta meta = display.getItemMeta();
         if (meta != null) {
             meta.displayName(ItemNameUtil.getLocalizedName(recycleItem.getMaterial()));
-            meta.setLore(buildLore(recycleItem, fluctuation, now, cycleMillis));
+            meta.lore(buildLore(recycleItem, fluctuation, now, cycleMillis));
             display.setItemMeta(meta);
         }
         return display;
     }
 
-    private static List<String> buildLore(RecycleItem recycleItem, MarketFluctuation fluctuation, long now, long cycleMillis) {
-        List<String> lore = new ArrayList<>();
-        lore.add("");
-        lore.add(MessageUtil.color("&7基准价格: &e" + MessageUtil.formatMoney(recycleItem.getBaseRecyclePrice())));
+    private static List<Component> buildLore(RecycleItem recycleItem, MarketFluctuation fluctuation, long now, long cycleMillis) {
+        List<Component> lore = new ArrayList<>();
+        lore.add(Component.empty());
+        lore.add(LEGACY.deserialize("&7基准价格: &e" + MessageUtil.formatMoney(recycleItem.getBaseRecyclePrice())));
 
         double fluc = fluctuation.calculate(recycleItem.getId(), now);
         double currentPrice = recycleItem.getCurrentRecyclePrice(fluc);
 
-        // 基于 snapshot 的涨跌计算：市场波动 + 供需变化都会反映
         if (recycleItem.getSnapshotPrice() <= 0 || now - recycleItem.getSnapshotTime() >= cycleMillis) {
             recycleItem.setSnapshotPrice(currentPrice);
             recycleItem.setSnapshotTime(now);
@@ -97,22 +99,23 @@ public final class RecycleGui {
             changePercent = (currentPrice - recycleItem.getSnapshotPrice()) / recycleItem.getSnapshotPrice() * 100.0;
         }
 
-        String trend;
-        if (changePercent > 0.1) {
-            trend = "&c\u2191 +" + String.format("%.1f", changePercent) + "%";
-        } else if (changePercent < -0.1) {
-            trend = "&a\u2193 " + String.format("%.1f", changePercent) + "%";
-        } else {
-            trend = "&7\u2014 持平";
-        }
-        lore.add(MessageUtil.color(trend));
-
-        lore.add(MessageUtil.color("&7当前回收价: &e" + MessageUtil.formatMoney(currentPrice)));
-
-        lore.add("");
-        lore.add(MessageUtil.color("&e左键 &7回收1个"));
-        lore.add(MessageUtil.color("&e右键 &7回收1组"));
+        String trend = computeTrend(changePercent);
+        lore.add(LEGACY.deserialize(trend));
+        lore.add(LEGACY.deserialize("&7当前回收价: &e" + MessageUtil.formatMoney(currentPrice)));
+        lore.add(Component.empty());
+        lore.add(LEGACY.deserialize("&e左键 &7回收1个"));
+        lore.add(LEGACY.deserialize("&e右键 &7回收1组"));
         return lore;
+    }
+
+    private static String computeTrend(double changePercent) {
+        if (changePercent > 0.1) {
+            return "&c↑ +" + String.format("%.1f", changePercent) + "%";
+        } else if (changePercent < -0.1) {
+            return "&a↓ " + String.format("%.1f", changePercent) + "%";
+        } else {
+            return "&7— 持平";
+        }
     }
 
     private static void startRefreshTask(GensouMarket plugin, Player player, Inventory inv,
@@ -135,7 +138,7 @@ public final class RecycleGui {
 
                 ItemMeta meta = existing.getItemMeta();
                 if (meta != null) {
-                    meta.setLore(buildLore(itemList.get(i), fluctuation, now, cyclMs));
+                    meta.lore(buildLore(itemList.get(i), fluctuation, now, cyclMs));
                     existing.setItemMeta(meta);
                 }
             }

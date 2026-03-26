@@ -2,16 +2,22 @@ package net.scarletphantasy.gensouMarket.util;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
-import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 import net.scarletphantasy.gensouMarket.GensouMarket;
 
+import java.util.HashMap;
+
 public final class MessageUtil {
+
+    private static final LegacyComponentSerializer AMPERSAND = LegacyComponentSerializer.legacyAmpersand();
+    private static final LegacyComponentSerializer SECTION = LegacyComponentSerializer.legacySection();
 
     private MessageUtil() {}
 
     public static String color(String message) {
-        return ChatColor.translateAlternateColorCodes('&', message);
+        return SECTION.serialize(AMPERSAND.deserialize(message));
     }
 
     public static void send(CommandSender sender, String message) {
@@ -38,5 +44,26 @@ public final class MessageUtil {
             return String.format("%,d", (long) amount);
         }
         return String.format("%,.2f", amount);
+    }
+
+    /**
+     * 检查玩家背包是否有空位。
+     */
+    public static boolean hasInventorySpace(Player player) {
+        return player.getInventory().firstEmpty() != -1;
+    }
+
+    /**
+     * 给玩家物品，背包满则掉落并提示。
+     */
+    public static void giveItem(Player player, ItemStack item) {
+        if (item == null) return;
+        HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(item);
+        if (!overflow.isEmpty()) {
+            for (ItemStack drop : overflow.values()) {
+                player.getWorld().dropItemNaturally(player.getLocation(), drop);
+            }
+            send(player, "&e背包已满，物品已掉落在你脚下！");
+        }
     }
 }

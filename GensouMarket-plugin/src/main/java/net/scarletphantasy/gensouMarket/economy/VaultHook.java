@@ -6,8 +6,6 @@ import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.plugin.RegisteredServiceProvider;
 
-import java.util.UUID;
-
 public class VaultHook {
 
     private Economy economy;
@@ -22,19 +20,11 @@ public class VaultHook {
             return false;
         }
         economy = rsp.getProvider();
-        return economy != null;
-    }
-
-    public Economy getEconomy() {
-        return economy;
-    }
-
-    public double getBalance(OfflinePlayer player) {
-        return economy.getBalance(player);
+        return true;
     }
 
     public boolean has(OfflinePlayer player, double amount) {
-        return economy.has(player, amount);
+        return !economy.has(player, amount);
     }
 
     public boolean withdraw(OfflinePlayer player, double amount) {
@@ -45,10 +35,5 @@ public class VaultHook {
     public boolean deposit(OfflinePlayer player, double amount) {
         EconomyResponse resp = economy.depositPlayer(player, amount);
         return resp.transactionSuccess();
-    }
-
-    public boolean deposit(UUID uuid, double amount) {
-        OfflinePlayer player = Bukkit.getOfflinePlayer(uuid);
-        return deposit(player, amount);
     }
 }

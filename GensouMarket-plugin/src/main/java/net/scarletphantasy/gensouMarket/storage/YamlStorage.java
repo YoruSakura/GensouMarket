@@ -10,9 +10,12 @@ import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class YamlStorage implements StorageProvider {
 
+    private static final Logger LOGGER = Logger.getLogger("GensouMarket");
     private final File dataFolder;
     private File listingsFile;
     private File auctionsFile;
@@ -35,7 +38,9 @@ public class YamlStorage implements StorageProvider {
     @Override
     public void initialize() throws Exception {
         File storageDir = new File(dataFolder, "data");
-        storageDir.mkdirs();
+        if (!storageDir.exists() && !storageDir.mkdirs()) {
+            throw new IOException("无法创建数据目录: " + storageDir.getAbsolutePath());
+        }
 
         listingsFile = new File(storageDir, "listings.yml");
         auctionsFile = new File(storageDir, "auctions.yml");
@@ -69,7 +74,7 @@ public class YamlStorage implements StorageProvider {
             recycleDataConfig.save(recycleFile);
             mailConfig.save(mailFile);
         } catch (IOException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[YAML] 保存文件失败", e);
         }
     }
 
@@ -106,8 +111,9 @@ public class YamlStorage implements StorageProvider {
     @Override
     public MarketListing getListing(int id) {
         String path = "listings." + id;
-        if (!listingsConfig.contains(path)) return null;
-        return mapListingFromYaml(id, listingsConfig.getConfigurationSection(path));
+        ConfigurationSection sec = listingsConfig.getConfigurationSection(path);
+        if (sec == null) return null;
+        return mapListingFromYaml(id, sec);
     }
 
     @Override
@@ -143,16 +149,20 @@ public class YamlStorage implements StorageProvider {
     private MarketListing mapListingFromYaml(int id, ConfigurationSection sec) {
         MarketListing l = new MarketListing();
         l.setId(id);
-        l.setSellerUuid(UUID.fromString(sec.getString("seller-uuid")));
+        String sellerUuid = sec.getString("seller-uuid");
+        if (sellerUuid == null) return null;
+        l.setSellerUuid(UUID.fromString(sellerUuid));
         l.setSellerName(sec.getString("seller-name"));
         l.setItemData(sec.getString("item-data"));
         l.setItemStack(ItemSerializer.deserialize(sec.getString("item-data")));
         l.setPrice(sec.getDouble("price"));
         l.setListTime(sec.getLong("list-time"));
         l.setExpireTime(sec.getLong("expire-time"));
-        l.setStatus(MarketListing.Status.valueOf(sec.getString("status")));
+        String status = sec.getString("status");
+        l.setStatus(status != null ? MarketListing.Status.valueOf(status) : MarketListing.Status.ACTIVE);
         if (sec.contains("buyer-uuid")) {
-            l.setBuyerUuid(UUID.fromString(sec.getString("buyer-uuid")));
+            String buyerUuid = sec.getString("buyer-uuid");
+            if (buyerUuid != null) l.setBuyerUuid(UUID.fromString(buyerUuid));
             l.setBuyerName(sec.getString("buyer-name"));
         }
         return l;
@@ -193,8 +203,9 @@ public class YamlStorage implements StorageProvider {
     @Override
     public Auction getAuction(int id) {
         String path = "auctions." + id;
-        if (!auctionsConfig.contains(path)) return null;
-        return mapAuctionFromYaml(id, auctionsConfig.getConfigurationSection(path));
+        ConfigurationSection sec = auctionsConfig.getConfigurationSection(path);
+        if (sec == null) return null;
+        return mapAuctionFromYaml(id, sec);
     }
 
     @Override
@@ -208,26 +219,30 @@ public class YamlStorage implements StorageProvider {
                 list.add(mapAuctionFromYaml(Integer.parseInt(key), sec));
             }
         }
-        list.sort((a, b) -> Long.compare(a.getEndTime(), b.getEndTime()));
+        list.sort(Comparator.comparingLong(Auction::getEndTime));
         return list;
     }
 
     private Auction mapAuctionFromYaml(int id, ConfigurationSection sec) {
         Auction a = new Auction();
         a.setId(id);
-        a.setSellerUuid(UUID.fromString(sec.getString("seller-uuid")));
+        String sellerUuid = sec.getString("seller-uuid");
+        if (sellerUuid == null) return null;
+        a.setSellerUuid(UUID.fromString(sellerUuid));
         a.setSellerName(sec.getString("seller-name"));
         a.setItemData(sec.getString("item-data"));
         a.setItemStack(ItemSerializer.deserialize(sec.getString("item-data")));
         a.setStartingPrice(sec.getDouble("starting-price"));
         a.setCurrentPrice(sec.getDouble("current-price"));
         if (sec.contains("highest-bidder-uuid")) {
-            a.setHighestBidderUuid(UUID.fromString(sec.getString("highest-bidder-uuid")));
+            String bidderUuid = sec.getString("highest-bidder-uuid");
+            if (bidderUuid != null) a.setHighestBidderUuid(UUID.fromString(bidderUuid));
             a.setHighestBidderName(sec.getString("highest-bidder-name"));
         }
         a.setStartTime(sec.getLong("start-time"));
         a.setEndTime(sec.getLong("end-time"));
-        a.setStatus(Auction.Status.valueOf(sec.getString("status")));
+        String status = sec.getString("status");
+        a.setStatus(status != null ? Auction.Status.valueOf(status) : Auction.Status.ACTIVE);
         return a;
     }
 
@@ -292,7 +307,9 @@ public class YamlStorage implements StorageProvider {
         for (String key : section.getKeys(false)) {
             ConfigurationSection sec = section.getConfigurationSection(key);
             if (sec == null) continue;
-            Material mat = Material.matchMaterial(sec.getString("material"));
+            String matName = sec.getString("material");
+            if (matName == null) continue;
+            Material mat = Material.matchMaterial(matName);
             if (mat == null) continue;
             ShopItem item = new ShopItem(key, mat, sec.getDouble("base-buy-price"));
             item.setTotalBought(sec.getInt("total-bought"));
@@ -336,7 +353,9 @@ public class YamlStorage implements StorageProvider {
         for (String key : section.getKeys(false)) {
             ConfigurationSection sec = section.getConfigurationSection(key);
             if (sec == null) continue;
-            Material mat = Material.matchMaterial(sec.getString("material"));
+            String matName = sec.getString("material");
+            if (matName == null) continue;
+            Material mat = Material.matchMaterial(matName);
             if (mat == null) continue;
             RecycleItem item = new RecycleItem(key, mat, sec.getDouble("base-recycle-price"));
             item.setTotalRecycled(sec.getInt("total-recycled"));
@@ -401,7 +420,7 @@ public class YamlStorage implements StorageProvider {
         try {
             config.save(file);
         } catch (IOException e) {
-            e.printStackTrace();
+            LOGGER.log(Level.WARNING, "[YAML] 保存文件失败", e);
         }
     }
 }
