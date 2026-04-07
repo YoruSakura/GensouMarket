@@ -97,9 +97,12 @@ public class RecycleManager {
         double pricePerUnit = recycleItem.getCurrentRecyclePrice(fluctuation);
         double totalEarning = pricePerUnit * amount;
 
-        removeMaterial(player, material, amount);
+        if (!vault.deposit(player, totalEarning)) {
+            MessageUtil.send(player, "&c入账失败，请稍后重试回收！");
+            return false;
+        }
 
-        vault.deposit(player, totalEarning);
+        removeMaterial(player, material, amount);
 
         priceEngine.onPlayerRecycle(recycleItem, amount);
 

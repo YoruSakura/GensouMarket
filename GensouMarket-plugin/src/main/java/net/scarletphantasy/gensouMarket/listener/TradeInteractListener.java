@@ -31,7 +31,7 @@ public class TradeInteractListener implements Listener {
         if (!sender.isSneaking()) return;
 
         // 交易功能是否启用
-        if (plugin.getConfigManager().isTradeEnabled()) return;
+        if (!plugin.getConfigManager().isTradeEnabled()) return;
 
         // 防抖
         long now = System.currentTimeMillis();

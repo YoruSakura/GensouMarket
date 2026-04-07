@@ -1,0 +1,4 @@
+rootProject.name = 'GensouMarket'
+
+include('GensouMarket-plugin')
+include('GensouMarket-velocity')

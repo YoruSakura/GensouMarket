@@ -88,6 +88,15 @@ trade:
   # 距离检测间隔 (tick, 20 = 1秒)
   distance-check-interval: 20
 
+# 跨服集群配置
+cluster:
+  # 是否启用跨服模式 (需要 Velocity 代理端插件配合)
+  enabled: false
+  # 当前服务器 ID (每个子服必须唯一, 例如: survival, creative, skyblock)
+  server-id: "default"
+  # Plugin Messaging Channel 名称
+  channel: "gensoumarket:main"
+
 # 调试模式 (允许购买自己的商品、竞拍自己的拍卖等)
 debug: false
 

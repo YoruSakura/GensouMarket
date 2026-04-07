@@ -23,6 +23,16 @@ public class PlayerListener implements Listener {
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
+
+        // 跨服模式：任意玩家加入时都补发一次 HELLO，避免代理端重启后注册状态丢失
+        if (plugin.isClusterEnabled()) {
+            plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+                if (player.isOnline()) {
+                    plugin.getProxyBridge().sendHello();
+                }
+            }, 5L);
+        }
+
         plugin.getServer().getScheduler().runTaskLaterAsynchronously(plugin, () -> {
             List<MailEntry> mail = plugin.getStorage().getPlayerMail(player.getUniqueId());
             if (mail.isEmpty()) return;

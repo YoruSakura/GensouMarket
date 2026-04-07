@@ -1,5 +1,9 @@
 package net.scarletphantasy.gensouMarket;
 
+import net.scarletphantasy.gensouMarket.bridge.ClusterEventPublisher;
+import net.scarletphantasy.gensouMarket.bridge.ProxyBridge;
+import net.scarletphantasy.gensouMarket.bridge.RemoteActionHandler;
+import net.scarletphantasy.gensouMarket.bridge.ViewSessionRegistry;
 import net.scarletphantasy.gensouMarket.command.CommandManager;
 import net.scarletphantasy.gensouMarket.config.ConfigManager;
 import net.scarletphantasy.gensouMarket.economy.VaultHook;
@@ -27,6 +31,11 @@ public final class GensouMarket extends JavaPlugin {
     private RecycleManager recycleManager;
     private TradeManager tradeManager;
 
+    // 跨服 Bridge（cluster.enabled=true 时才初始化）
+    private ProxyBridge proxyBridge;
+    private ClusterEventPublisher clusterEventPublisher;
+    private ViewSessionRegistry viewSessionRegistry;
+
     @Override
     public void onEnable() {
         instance = this;
@@ -46,6 +55,14 @@ public final class GensouMarket extends JavaPlugin {
 
         // 初始化存储
         storage = StorageFactory.create(configManager, getDataFolder());
+
+        // 跨服模式校验：必须使用 MySQL
+        if (configManager.isClusterEnabled() && !"mysql".equalsIgnoreCase(configManager.getStorageType())) {
+            getLogger().severe("跨服模式 (cluster.enabled=true) 必须使用 MySQL 存储！当前: " + configManager.getStorageType());
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
         try {
             storage.initialize();
             getLogger().info("数据存储已初始化 (" + configManager.getStorageType() + ")");
@@ -65,6 +82,17 @@ public final class GensouMarket extends JavaPlugin {
         recycleManager.loadItems();
 
         tradeManager = new TradeManager(this);
+
+        // 初始化跨服 Bridge
+        if (configManager.isClusterEnabled()) {
+            viewSessionRegistry = new ViewSessionRegistry();
+            proxyBridge = new ProxyBridge(this, configManager.getClusterChannel(), configManager.getClusterServerId());
+            clusterEventPublisher = new ClusterEventPublisher(proxyBridge);
+            RemoteActionHandler remoteHandler = new RemoteActionHandler(this, viewSessionRegistry);
+            proxyBridge.setRemoteActionHandler(remoteHandler);
+            proxyBridge.enable();
+            getLogger().info("跨服模式已启用 (serverId=" + configManager.getClusterServerId() + ")");
+        }
 
         // 恢复活跃拍卖的定时任务
         auctionManager.restoreActiveAuctions();
@@ -99,6 +127,7 @@ public final class GensouMarket extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (proxyBridge != null) proxyBridge.disable();
         if (tradeManager != null) tradeManager.cancelAllActiveTrades();
         if (shopManager != null) shopManager.saveAllData();
         if (recycleManager != null) recycleManager.saveAllData();
@@ -115,4 +144,8 @@ public final class GensouMarket extends JavaPlugin {
     public ShopManager getShopManager() { return shopManager; }
     public RecycleManager getRecycleManager() { return recycleManager; }
     public TradeManager getTradeManager() { return tradeManager; }
+    public ProxyBridge getProxyBridge() { return proxyBridge; }
+    public ClusterEventPublisher getClusterEventPublisher() { return clusterEventPublisher; }
+    public ViewSessionRegistry getViewSessionRegistry() { return viewSessionRegistry; }
+    public boolean isClusterEnabled() { return proxyBridge != null; }
 }

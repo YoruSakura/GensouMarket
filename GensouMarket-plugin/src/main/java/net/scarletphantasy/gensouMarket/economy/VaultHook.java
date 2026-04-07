@@ -24,7 +24,7 @@ public class VaultHook {
     }
 
     public boolean has(OfflinePlayer player, double amount) {
-        return !economy.has(player, amount);
+        return economy.has(player, amount);
     }
 
     public boolean withdraw(OfflinePlayer player, double amount) {

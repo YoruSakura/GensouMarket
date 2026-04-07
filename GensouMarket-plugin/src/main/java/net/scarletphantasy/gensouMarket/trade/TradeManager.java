@@ -33,7 +33,7 @@ public class TradeManager {
      * 发起交易请求
      */
     public void sendRequest(Player sender, Player target) {
-        if (plugin.getConfigManager().isTradeEnabled()) {
+        if (!plugin.getConfigManager().isTradeEnabled()) {
             MessageUtil.send(sender, "&c面对面交易功能已禁用！");
             return;
         }

@@ -144,13 +144,18 @@ public class ConfigManager {
     }
 
     // ---- Trade ----
-    public boolean isTradeEnabled() { return !config.getBoolean("trade.enabled"); }
+    public boolean isTradeEnabled() { return config.getBoolean("trade.enabled", true); }
     public int getTradeRequestTimeout() { return config.getInt("trade.request-timeout", 30); }
     public double getTradeMaxDistance() { return config.getDouble("trade.max-distance", 10.0); }
     public int getTradeDistanceCheckInterval() { return config.getInt("trade.distance-check-interval", 20); }
 
     // ---- Prefix ----
     public String getPrefix() { return config.getString("prefix", "&6[幻想集市] &r"); }
+
+    // ---- Cluster ----
+    public boolean isClusterEnabled() { return config.getBoolean("cluster.enabled", false); }
+    public String getClusterServerId() { return config.getString("cluster.server-id", "default"); }
+    public String getClusterChannel() { return config.getString("cluster.channel", "gensoumarket:main"); }
 
     // ---- Debug ----
     public boolean isDebug() { return config.getBoolean("debug", false); }

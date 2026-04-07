@@ -186,6 +186,32 @@ public class SQLiteStorage implements StorageProvider {
         return list;
     }
 
+    @Override
+    public boolean markListingSoldIfActive(int listingId, UUID buyerUuid, String buyerName) {
+        String sql = "UPDATE market_listings SET status='SOLD', buyer_uuid=?, buyer_name=? WHERE id=? AND status='ACTIVE'";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, buyerUuid.toString());
+            ps.setString(2, buyerName);
+            ps.setInt(3, listingId);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 原子标记上架物品售出失败", e);
+        }
+        return false;
+    }
+
+    @Override
+    public boolean markListingExpiredIfActive(int listingId) {
+        String sql = "UPDATE market_listings SET status='EXPIRED' WHERE id=? AND status='ACTIVE'";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setInt(1, listingId);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 原子标记上架物品过期失败", e);
+        }
+        return false;
+    }
+
     private MarketListing mapListing(ResultSet rs) throws SQLException {
         MarketListing l = new MarketListing();
         l.setId(rs.getInt("id"));
@@ -273,6 +299,48 @@ public class SQLiteStorage implements StorageProvider {
             LOGGER.log(Level.WARNING, "[SQLite] 获取活跃拍卖列表失败", e);
         }
         return list;
+    }
+
+    @Override
+    public boolean updateAuctionBidIfMatch(int auctionId, double expectedCurrentPrice,
+                                            double newPrice, UUID newBidderUuid, String newBidderName) {
+        String sql = "UPDATE auctions SET current_price=?, highest_bidder_uuid=?, highest_bidder_name=? " +
+                     "WHERE id=? AND status='ACTIVE' AND current_price=?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setDouble(1, newPrice);
+            ps.setString(2, newBidderUuid.toString());
+            ps.setString(3, newBidderName);
+            ps.setInt(4, auctionId);
+            ps.setDouble(5, expectedCurrentPrice);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 原子更新拍卖出价失败", e);
+        }
+        return false;
+    }
+
+    @Override
+    public boolean markAuctionEndedIfActive(int auctionId) {
+        String sql = "UPDATE auctions SET status='ENDED' WHERE id=? AND status='ACTIVE'";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setInt(1, auctionId);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 原子标记拍卖结束失败", e);
+        }
+        return false;
+    }
+
+    @Override
+    public boolean markAuctionCancelledIfActive(int auctionId) {
+        String sql = "UPDATE auctions SET status='CANCELLED' WHERE id=? AND status='ACTIVE'";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setInt(1, auctionId);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 原子标记拍卖取消失败", e);
+        }
+        return false;
     }
 
     private Auction mapAuction(ResultSet rs) throws SQLException {
@@ -479,6 +547,30 @@ public class SQLiteStorage implements StorageProvider {
             LOGGER.log(Level.WARNING, "[SQLite] 获取玩家邮件失败", e);
         }
         return list;
+    }
+
+    @Override
+    public boolean claimMail(int id) {
+        String sql = "UPDATE player_mail SET claimed=1 WHERE id=? AND claimed=0";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setInt(1, id);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 标记邮件领取失败", e);
+        }
+        return false;
+    }
+
+    @Override
+    public boolean unclaimMail(int id) {
+        String sql = "UPDATE player_mail SET claimed=0 WHERE id=? AND claimed=1";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setInt(1, id);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 回滚邮件领取状态失败", e);
+        }
+        return false;
     }
 
     @Override

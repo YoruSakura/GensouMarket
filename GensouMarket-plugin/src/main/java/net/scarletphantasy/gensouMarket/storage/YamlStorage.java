@@ -146,6 +146,28 @@ public class YamlStorage implements StorageProvider {
         return list;
     }
 
+    @Override
+    public synchronized boolean markListingSoldIfActive(int listingId, UUID buyerUuid, String buyerName) {
+        String path = "listings." + listingId;
+        ConfigurationSection sec = listingsConfig.getConfigurationSection(path);
+        if (sec == null || !"ACTIVE".equals(sec.getString("status"))) return false;
+        sec.set("status", "SOLD");
+        sec.set("buyer-uuid", buyerUuid.toString());
+        sec.set("buyer-name", buyerName);
+        saveFile(listingsConfig, listingsFile);
+        return true;
+    }
+
+    @Override
+    public synchronized boolean markListingExpiredIfActive(int listingId) {
+        String path = "listings." + listingId;
+        ConfigurationSection sec = listingsConfig.getConfigurationSection(path);
+        if (sec == null || !"ACTIVE".equals(sec.getString("status"))) return false;
+        sec.set("status", "EXPIRED");
+        saveFile(listingsConfig, listingsFile);
+        return true;
+    }
+
     private MarketListing mapListingFromYaml(int id, ConfigurationSection sec) {
         MarketListing l = new MarketListing();
         l.setId(id);
@@ -221,6 +243,40 @@ public class YamlStorage implements StorageProvider {
         }
         list.sort(Comparator.comparingLong(Auction::getEndTime));
         return list;
+    }
+
+    @Override
+    public synchronized boolean updateAuctionBidIfMatch(int auctionId, double expectedCurrentPrice,
+                                                         double newPrice, UUID newBidderUuid, String newBidderName) {
+        String path = "auctions." + auctionId;
+        ConfigurationSection sec = auctionsConfig.getConfigurationSection(path);
+        if (sec == null || !"ACTIVE".equals(sec.getString("status"))) return false;
+        if (Double.compare(sec.getDouble("current-price"), expectedCurrentPrice) != 0) return false;
+        sec.set("current-price", newPrice);
+        sec.set("highest-bidder-uuid", newBidderUuid.toString());
+        sec.set("highest-bidder-name", newBidderName);
+        saveFile(auctionsConfig, auctionsFile);
+        return true;
+    }
+
+    @Override
+    public synchronized boolean markAuctionEndedIfActive(int auctionId) {
+        String path = "auctions." + auctionId;
+        ConfigurationSection sec = auctionsConfig.getConfigurationSection(path);
+        if (sec == null || !"ACTIVE".equals(sec.getString("status"))) return false;
+        sec.set("status", "ENDED");
+        saveFile(auctionsConfig, auctionsFile);
+        return true;
+    }
+
+    @Override
+    public synchronized boolean markAuctionCancelledIfActive(int auctionId) {
+        String path = "auctions." + auctionId;
+        ConfigurationSection sec = auctionsConfig.getConfigurationSection(path);
+        if (sec == null || !"ACTIVE".equals(sec.getString("status"))) return false;
+        sec.set("status", "CANCELLED");
+        saveFile(auctionsConfig, auctionsFile);
+        return true;
     }
 
     private Auction mapAuctionFromYaml(int id, ConfigurationSection sec) {
@@ -408,6 +464,28 @@ public class YamlStorage implements StorageProvider {
         }
         list.sort((a, b) -> Long.compare(b.getTimestamp(), a.getTimestamp()));
         return list;
+    }
+
+    @Override
+    public synchronized boolean claimMail(int id) {
+        String path = "mail." + id;
+        if (!mailConfig.contains(path) || mailConfig.getBoolean(path + ".claimed", false)) {
+            return false;
+        }
+        mailConfig.set(path + ".claimed", true);
+        saveFile(mailConfig, mailFile);
+        return true;
+    }
+
+    @Override
+    public synchronized boolean unclaimMail(int id) {
+        String path = "mail." + id;
+        if (!mailConfig.contains(path) || !mailConfig.getBoolean(path + ".claimed", false)) {
+            return false;
+        }
+        mailConfig.set(path + ".claimed", false);
+        saveFile(mailConfig, mailFile);
+        return true;
     }
 
     @Override

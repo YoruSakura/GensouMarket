@@ -1,6 +1,7 @@
 package net.scarletphantasy.gensouMarket.market;
 
 import net.scarletphantasy.gensouMarket.GensouMarket;
+import net.scarletphantasy.gensouMarket.bridge.ClusterEventPublisher;
 import net.scarletphantasy.gensouMarket.config.ConfigManager;
 import net.scarletphantasy.gensouMarket.economy.VaultHook;
 import net.scarletphantasy.gensouMarket.model.MailEntry;
@@ -41,58 +42,56 @@ public class MarketManager {
         }
 
         double tax = price * config.getListingTax();
-        if (vault.has(seller, tax)) {
+        if (!vault.has(seller, tax)) {
             MessageUtil.send(seller, "&c你没有足够的金币支付上架税 (" + MessageUtil.formatMoney(tax) + ")！");
             return;
         }
 
-        // 异步检查上架数量
+        // 先锁定物品与税金，避免玩家切服导致异步回调直接中断
         UUID sellerUuid = seller.getUniqueId();
         String sellerName = seller.getName();
         ItemStack cloned = item.clone();
         String itemData = ItemSerializer.serialize(item);
+        if (!vault.withdraw(seller, tax)) {
+            MessageUtil.send(seller, "&c扣除上架税失败，请稍后重试！");
+            return;
+        }
+        seller.getInventory().setItemInMainHand(null);
 
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             List<MarketListing> existing = storage.getPlayerListings(sellerUuid);
+            if (existing.size() >= config.getMaxListings()) {
+                rollbackSellReservation(sellerUuid, cloned, itemData, tax,
+                        "&c你的上架数量已达上限 (" + config.getMaxListings() + ")！物品和税金已退回。",
+                        "市场上架未完成：上架数量已达上限，物品和税金已退回");
+                return;
+            }
+
+            MarketListing listing = new MarketListing();
+            listing.setSellerUuid(sellerUuid);
+            listing.setSellerName(sellerName);
+            listing.setItemStack(cloned);
+            listing.setItemData(itemData);
+            listing.setPrice(price);
+            listing.setListTime(System.currentTimeMillis());
+            listing.setExpireTime(System.currentTimeMillis() + config.getExpireHours() * 3600000L);
+
+            int id = storage.saveListing(listing);
+            if (id <= 0) {
+                rollbackSellReservation(sellerUuid, cloned, itemData, tax,
+                        "&c上架失败，物品和税金已退回。",
+                        "市场上架失败，物品和税金已退回");
+                return;
+            }
+
             Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!seller.isOnline()) return;
-                if (existing.size() >= config.getMaxListings()) {
-                    MessageUtil.send(seller, "&c你的上架数量已达上限 (" + config.getMaxListings() + ")！");
-                    return;
+                Player currentSeller = Bukkit.getPlayer(sellerUuid);
+                if (currentSeller != null && currentSeller.isOnline()) {
+                    MessageUtil.send(currentSeller, "&a成功上架物品！ID: &e" + id + "&a，价格: &e" +
+                            MessageUtil.formatMoney(price) + "&a，上架税: &e" + MessageUtil.formatMoney(tax));
                 }
-                // 再次检查手持物品是否还在
-                ItemStack currentHand = seller.getInventory().getItemInMainHand();
-                if (!currentHand.isSimilar(cloned) || currentHand.getAmount() < cloned.getAmount()) {
-                    MessageUtil.send(seller, "&c物品已变化，请重新操作！");
-                    return;
-                }
-                if (vault.has(seller, tax)) {
-                    MessageUtil.send(seller, "&c你没有足够的金币支付上架税！");
-                    return;
-                }
-
-                vault.withdraw(seller, tax);
-                seller.getInventory().setItemInMainHand(null);
-
-                MarketListing listing = new MarketListing();
-                listing.setSellerUuid(sellerUuid);
-                listing.setSellerName(sellerName);
-                listing.setItemStack(cloned);
-                listing.setItemData(itemData);
-                listing.setPrice(price);
-                listing.setListTime(System.currentTimeMillis());
-                listing.setExpireTime(System.currentTimeMillis() + config.getExpireHours() * 3600000L);
-
-                // 异步写DB
-                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    int id = storage.saveListing(listing);
-                    Bukkit.getScheduler().runTask(plugin, () -> {
-                        if (seller.isOnline()) {
-                            MessageUtil.send(seller, "&a成功上架物品！ID: &e" + id + "&a，价格: &e" +
-                                    MessageUtil.formatMoney(price) + "&a，上架税: &e" + MessageUtil.formatMoney(tax));
-                        }
-                    });
-                });
+                // 跨服广播上架
+                publishIfCluster(p -> p.publishListingChanged(id, "ACTIVE", sellerUuid));
             });
         });
     }
@@ -117,14 +116,26 @@ public class MarketManager {
                     return;
                 }
 
-                listing.setStatus(MarketListing.Status.CANCELLED);
+                // 异步原子取消
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    boolean cancelled = storage.markListingExpiredIfActive(listingId);
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (!player.isOnline()) return;
+                        if (!cancelled) {
+                            MessageUtil.send(player, "&c该物品已不在出售中！");
+                            return;
+                        }
+                        // 原子取消后更新为 CANCELLED 状态（markListingExpiredIfActive 设置的是 EXPIRED）
+                        listing.setStatus(MarketListing.Status.CANCELLED);
+                        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.updateListing(listing));
 
-                MessageUtil.giveItem(player, listing.getItemStack());
+                        MessageUtil.giveItem(player, listing.getItemStack());
+                        MessageUtil.send(player, "&a已成功下架物品 #" + listingId);
 
-                MessageUtil.send(player, "&a已成功下架物品 #" + listingId);
-
-                // 异步写DB
-                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.updateListing(listing));
+                        // 跨服广播下架
+                        publishIfCluster(p -> p.publishListingChanged(listingId, "CANCELLED", listing.getSellerUuid()));
+                    });
+                });
             });
         });
     }
@@ -132,17 +143,34 @@ public class MarketManager {
     public void buyListing(Player buyer, int listingId) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             MarketListing listing = storage.getListing(listingId);
+            if (listing == null || listing.getStatus() != MarketListing.Status.ACTIVE) {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (buyer.isOnline()) MessageUtil.send(buyer, "&c该物品已不在出售中！");
+                });
+                return;
+            }
+
+            // 原子抢占：ACTIVE -> SOLD
+            boolean claimed = storage.markListingSoldIfActive(listingId, buyer.getUniqueId(), buyer.getName());
+            if (!claimed) {
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (buyer.isOnline()) MessageUtil.send(buyer, "&c该物品已被其他玩家购买！");
+                });
+                return;
+            }
+
+            // 抢占成功，回主线程执行经济操作
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (!buyer.isOnline()) return;
-                if (listing == null) {
-                    MessageUtil.send(buyer, "&c未找到该上架物品！");
-                    return;
-                }
-                if (listing.getStatus() != MarketListing.Status.ACTIVE) {
-                    MessageUtil.send(buyer, "&c该物品已不在出售中！");
-                    return;
-                }
+
                 if (listing.getSellerUuid().equals(buyer.getUniqueId()) && !config.isDebug()) {
+                    // 不应购买自己的商品，回滚 DB 状态
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        listing.setStatus(MarketListing.Status.ACTIVE);
+                        listing.setBuyerUuid(null);
+                        listing.setBuyerName(null);
+                        storage.updateListing(listing);
+                    });
                     MessageUtil.send(buyer, "&c你不能购买自己上架的物品！");
                     return;
                 }
@@ -150,18 +178,30 @@ public class MarketManager {
                 double totalCost = listing.getPrice();
                 double tax = totalCost * config.getTransactionTax();
 
-                if (vault.has(buyer, totalCost)) {
+                if (!vault.has(buyer, totalCost)) {
+                    // 余额不足，回滚 DB 状态
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        listing.setStatus(MarketListing.Status.ACTIVE);
+                        listing.setBuyerUuid(null);
+                        listing.setBuyerName(null);
+                        storage.updateListing(listing);
+                    });
                     MessageUtil.send(buyer, "&c你没有足够的金币！需要: " + MessageUtil.formatMoney(totalCost));
                     return;
                 }
 
-                vault.withdraw(buyer, totalCost);
+                if (!vault.withdraw(buyer, totalCost)) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        listing.setStatus(MarketListing.Status.ACTIVE);
+                        listing.setBuyerUuid(null);
+                        listing.setBuyerName(null);
+                        storage.updateListing(listing);
+                    });
+                    MessageUtil.send(buyer, "&c扣款失败，请稍后重试购买！");
+                    return;
+                }
 
                 double sellerReceive = totalCost - tax;
-
-                listing.setStatus(MarketListing.Status.SOLD);
-                listing.setBuyerUuid(buyer.getUniqueId());
-                listing.setBuyerName(buyer.getName());
 
                 // 给买家物品
                 MessageUtil.giveItem(buyer, listing.getItemStack());
@@ -170,25 +210,40 @@ public class MarketManager {
                 Player seller = Bukkit.getPlayer(listing.getSellerUuid());
                 MailEntry mail = null;
                 if (seller != null && seller.isOnline()) {
-                    vault.deposit(seller, sellerReceive);
-                    MessageUtil.send(seller, "&a你上架的物品已被 &e" + buyer.getName() +
-                            " &a购买！收入: &e" + MessageUtil.formatMoney(sellerReceive));
+                    if (vault.deposit(seller, sellerReceive)) {
+                        MessageUtil.send(seller, "&a你上架的物品已被 &e" + buyer.getName() +
+                                " &a购买！收入: &e" + MessageUtil.formatMoney(sellerReceive));
+                    } else {
+                        mail = createMoneyMail(listing.getSellerUuid(), sellerReceive,
+                                "你上架的物品已被 " + buyer.getName() + " 购买");
+                        MessageUtil.send(seller, "&e经济入账失败，收入已暂存到邮箱，使用 &a/gmarket collect &e领取");
+                    }
+                } else if (plugin.isClusterEnabled()) {
+                    MailEntry sellerMail = createMoneyMail(listing.getSellerUuid(), sellerReceive,
+                            "你上架的物品已被 " + buyer.getName() + " 购买");
+                    plugin.getClusterEventPublisher().requestRemoteDeposit(
+                            listing.getSellerUuid(), sellerReceive,
+                            "你上架的物品已被 " + buyer.getName() + " 购买！收入: " + MessageUtil.formatMoney(sellerReceive),
+                            ignored -> saveMailAsync(sellerMail, true, false, null));
                 } else {
-                    mail = new MailEntry();
-                    mail.setPlayerUuid(listing.getSellerUuid());
-                    mail.setMoney(sellerReceive);
-                    mail.setMessage("你上架的物品已被 " + buyer.getName() + " 购买");
+                    mail = createMoneyMail(listing.getSellerUuid(), sellerReceive,
+                            "你上架的物品已被 " + buyer.getName() + " 购买");
                 }
 
                 MessageUtil.send(buyer, "&a成功购买物品！花费: &e" + MessageUtil.formatMoney(totalCost) +
                         " &a(含税: &e" + MessageUtil.formatMoney(tax) + "&a)");
 
-                // 异步写DB
+                // 异步写邮箱（listing 状态已在原子操作中更新，无需再 updateListing）
                 final MailEntry finalMail = mail;
-                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    storage.updateListing(listing);
-                    if (finalMail != null) storage.saveMail(finalMail);
-                });
+                if (finalMail != null) {
+                    saveMailAsync(finalMail, true, false, null);
+                }
+
+                // 跨服广播售出
+                publishIfCluster(p -> p.publishListingSold(listingId,
+                        listing.getSellerUuid(), listing.getSellerName(),
+                        buyer.getUniqueId(), buyer.getName(),
+                        totalCost, sellerReceive, tax));
             });
         });
     }
@@ -225,26 +280,34 @@ public class MarketManager {
 
         for (MarketListing listing : active) {
             if (listing.isExpired()) {
-                listing.setStatus(MarketListing.Status.EXPIRED);
-                expired.add(listing);
+                // 原子抢占：ACTIVE -> EXPIRED
+                if (storage.markListingExpiredIfActive(listing.getId())) {
+                    expired.add(listing);
 
-                MailEntry mail = new MailEntry();
-                mail.setPlayerUuid(listing.getSellerUuid());
-                mail.setItemData(listing.getItemData());
-                mail.setItemStack(listing.getItemStack());
-                mail.setMessage("你上架的物品已过期");
-                mails.add(mail);
+                    MailEntry mail = new MailEntry();
+                    mail.setPlayerUuid(listing.getSellerUuid());
+                    mail.setItemData(listing.getItemData());
+                    mail.setItemStack(listing.getItemStack());
+                    mail.setMessage("你上架的物品已过期");
+                    mails.add(mail);
+                }
             }
         }
 
         if (expired.isEmpty()) return;
 
-        // 写DB（仍在异步线程）
-        for (MarketListing listing : expired) {
-            storage.updateListing(listing);
-        }
+        // 写邮箱（仍在异步线程）
         for (MailEntry mail : mails) {
             storage.saveMail(mail);
+            // 跨服通知邮箱
+            publishIfCluster(p -> p.publishMailCreated(mail.getPlayerUuid(), false, true, mail.getMessage()));
+            publishIfCluster(p -> p.requestPlayerNotify(mail.getPlayerUuid(),
+                    "&e你有上架物品已过期，使用 &a/gmarket collect &e领取退回物品"));
+        }
+
+        // 跨服广播过期
+        for (MarketListing listing : expired) {
+            publishIfCluster(p -> p.publishListingChanged(listing.getId(), "EXPIRED", listing.getSellerUuid()));
         }
 
         // 主线程通知在线玩家
@@ -254,6 +317,58 @@ public class MarketManager {
                 if (seller != null && seller.isOnline()) {
                     MessageUtil.send(seller, "&e你上架的物品 #" + listing.getId() + " 已过期，请使用 /gmarket collect 领取！");
                 }
+            }
+        });
+    }
+
+    private void publishIfCluster(java.util.function.Consumer<ClusterEventPublisher> action) {
+        if (plugin.isClusterEnabled()) {
+            action.accept(plugin.getClusterEventPublisher());
+        }
+    }
+
+    private void rollbackSellReservation(UUID sellerUuid, ItemStack itemStack, String itemData, double tax,
+                                         String localMessage, String mailMessage) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Player seller = Bukkit.getPlayer(sellerUuid);
+            if (seller != null && seller.isOnline()) {
+                MessageUtil.giveItem(seller, itemStack);
+                if (tax <= 0 || vault.deposit(seller, tax)) {
+                    MessageUtil.send(seller, localMessage);
+                } else {
+                    MailEntry mail = createMoneyMail(sellerUuid, tax, mailMessage);
+                    saveMailAsync(mail, true, false,
+                            "&e市场上架税退款已发送到邮箱，使用 &a/gmarket collect &e领取");
+                    MessageUtil.send(seller, "&e物品已退回，但税金退款失败，已转入邮箱");
+                }
+                return;
+            }
+
+            MailEntry mail = new MailEntry();
+            mail.setPlayerUuid(sellerUuid);
+            mail.setItemStack(itemStack);
+            mail.setItemData(itemData);
+            mail.setMoney(tax);
+            mail.setMessage(mailMessage);
+            saveMailAsync(mail, true, true,
+                    "&e市场上架未完成，物品和税金已发送到邮箱，使用 &a/gmarket collect &e领取");
+        });
+    }
+
+    private MailEntry createMoneyMail(UUID playerUuid, double money, String message) {
+        MailEntry mail = new MailEntry();
+        mail.setPlayerUuid(playerUuid);
+        mail.setMoney(money);
+        mail.setMessage(message);
+        return mail;
+    }
+
+    private void saveMailAsync(MailEntry mail, boolean hasMoney, boolean hasItem, String notifyMessage) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            storage.saveMail(mail);
+            publishIfCluster(p -> p.publishMailCreated(mail.getPlayerUuid(), hasMoney, hasItem, mail.getMessage()));
+            if (notifyMessage != null && !notifyMessage.isEmpty()) {
+                publishIfCluster(p -> p.requestPlayerNotify(mail.getPlayerUuid(), notifyMessage));
             }
         });
     }

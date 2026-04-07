@@ -1,6 +1,7 @@
 package net.scarletphantasy.gensouMarket.gui;
 
 import net.scarletphantasy.gensouMarket.GensouMarket;
+import net.scarletphantasy.gensouMarket.bridge.ViewSessionRegistry;
 import net.scarletphantasy.gensouMarket.model.Auction;
 import net.scarletphantasy.gensouMarket.model.MarketListing;
 import net.scarletphantasy.gensouMarket.model.RecycleItem;
@@ -115,6 +116,9 @@ public class GuiListener implements Listener {
     public void onInventoryClose(InventoryCloseEvent event) {
         if (!(event.getInventory().getHolder() instanceof GuiHolder holder)) return;
         if (!(event.getPlayer() instanceof Player player)) return;
+
+        // 跨服 GUI 视图注销
+        unregisterView(player);
 
         if (holder.getType() == GuiHolder.GuiType.RECYCLE) {
             RecycleGui.cancelRefreshTask(player.getUniqueId());
@@ -283,13 +287,19 @@ public class GuiListener implements Listener {
             case 10 -> Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                 List<MarketListing> listings = plugin.getMarketManager().getActiveListings();
                 Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (player.isOnline()) MarketGui.openMarketBrowse(plugin, player, listings, 0);
+                    if (player.isOnline()) {
+                        MarketGui.openMarketBrowse(plugin, player, listings, 0);
+                        registerView(player, GuiHolder.GuiType.MARKET_BROWSE, 0);
+                    }
                 });
             });
             case 12 -> Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                 List<Auction> auctions = plugin.getAuctionManager().getActiveAuctions();
                 Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (player.isOnline()) AuctionGui.openAuctions(plugin, player, auctions, 0);
+                    if (player.isOnline()) {
+                        AuctionGui.openAuctions(plugin, player, auctions, 0);
+                        registerView(player, GuiHolder.GuiType.AUCTION_LIST, 0);
+                    }
                 });
             });
             case 14 -> ShopGui.openShop(plugin, player, 0);
@@ -383,6 +393,7 @@ public class GuiListener implements Listener {
                         if (!player.isOnline()) return;
                         if (fresh != null && fresh.getStatus() == Auction.Status.ACTIVE) {
                             AuctionGui.openAuctionDetail(plugin, player, fresh);
+                            registerView(player, GuiHolder.GuiType.AUCTION_DETAIL, fresh.getId());
                         } else {
                             MessageUtil.send(player, "&c该拍卖已结束！");
                             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
@@ -528,6 +539,20 @@ public class GuiListener implements Listener {
                 plugin.getRecycleManager().recycleItem(player, recycleItem, amount);
                 RecycleGui.openRecycle(plugin, player, page);
             }
+        }
+    }
+
+    private void registerView(Player player, GuiHolder.GuiType type, int relatedId) {
+        ViewSessionRegistry registry = plugin.getViewSessionRegistry();
+        if (registry != null) {
+            registry.register(player.getUniqueId(), type, relatedId);
+        }
+    }
+
+    private void unregisterView(Player player) {
+        ViewSessionRegistry registry = plugin.getViewSessionRegistry();
+        if (registry != null) {
+            registry.unregister(player.getUniqueId());
         }
     }
 }

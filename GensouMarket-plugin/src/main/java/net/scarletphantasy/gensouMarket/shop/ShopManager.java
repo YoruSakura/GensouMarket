@@ -77,12 +77,15 @@ public class ShopManager {
         double pricePerUnit = shopItem.getCurrentBuyPrice();
         double totalCost = pricePerUnit * amount;
 
-        if (vault.has(player, totalCost)) {
+        if (!vault.has(player, totalCost)) {
             MessageUtil.send(player, "&c你没有足够的金币！需要: &e" + MessageUtil.formatMoney(totalCost));
             return false;
         }
 
-        vault.withdraw(player, totalCost);
+        if (!vault.withdraw(player, totalCost)) {
+            MessageUtil.send(player, "&c扣款失败，请稍后重试购买！");
+            return false;
+        }
 
         ItemStack item = new ItemStack(shopItem.getMaterial(), amount);
         HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(item);
