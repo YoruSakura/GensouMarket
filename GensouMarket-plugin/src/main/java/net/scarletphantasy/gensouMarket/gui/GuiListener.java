@@ -289,7 +289,6 @@ public class GuiListener implements Listener {
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     if (player.isOnline()) {
                         MarketGui.openMarketBrowse(plugin, player, listings, 0);
-                        registerView(player, GuiHolder.GuiType.MARKET_BROWSE, 0);
                     }
                 });
             });
@@ -298,7 +297,6 @@ public class GuiListener implements Listener {
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     if (player.isOnline()) {
                         AuctionGui.openAuctions(plugin, player, auctions, 0);
-                        registerView(player, GuiHolder.GuiType.AUCTION_LIST, 0);
                     }
                 });
             });
@@ -393,7 +391,6 @@ public class GuiListener implements Listener {
                         if (!player.isOnline()) return;
                         if (fresh != null && fresh.getStatus() == Auction.Status.ACTIVE) {
                             AuctionGui.openAuctionDetail(plugin, player, fresh);
-                            registerView(player, GuiHolder.GuiType.AUCTION_DETAIL, fresh.getId());
                         } else {
                             MessageUtil.send(player, "&c该拍卖已结束！");
                             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
@@ -539,13 +536,6 @@ public class GuiListener implements Listener {
                 plugin.getRecycleManager().recycleItem(player, recycleItem, amount);
                 RecycleGui.openRecycle(plugin, player, page);
             }
-        }
-    }
-
-    private void registerView(Player player, GuiHolder.GuiType type, int relatedId) {
-        ViewSessionRegistry registry = plugin.getViewSessionRegistry();
-        if (registry != null) {
-            registry.register(player.getUniqueId(), type, relatedId);
         }
     }
 

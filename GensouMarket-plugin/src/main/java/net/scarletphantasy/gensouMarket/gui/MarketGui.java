@@ -4,6 +4,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.scarletphantasy.gensouMarket.GensouMarket;
+import net.scarletphantasy.gensouMarket.bridge.ViewSessionRegistry;
 import net.scarletphantasy.gensouMarket.model.MarketListing;
 import net.scarletphantasy.gensouMarket.util.MessageUtil;
 import org.bukkit.Bukkit;
@@ -103,6 +104,10 @@ public final class MarketGui {
         }
 
         player.openInventory(inv);
+        ViewSessionRegistry registry = plugin.getViewSessionRegistry();
+        if (registry != null) {
+            registry.register(player.getUniqueId(), GuiHolder.GuiType.MARKET_BROWSE, 0);
+        }
     }
 
     static ItemStack createMenuItem(Material material, String name, String... loreLines) {

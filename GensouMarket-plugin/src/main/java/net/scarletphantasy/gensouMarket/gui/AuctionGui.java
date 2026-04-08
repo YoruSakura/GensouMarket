@@ -4,6 +4,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.scarletphantasy.gensouMarket.GensouMarket;
+import net.scarletphantasy.gensouMarket.bridge.ViewSessionRegistry;
 import net.scarletphantasy.gensouMarket.model.Auction;
 import net.scarletphantasy.gensouMarket.util.MessageUtil;
 import org.bukkit.Bukkit;
@@ -23,12 +24,12 @@ public final class AuctionGui {
 
     private AuctionGui() {}
 
-    public static void openAuctions(@SuppressWarnings("unused") GensouMarket plugin, Player player, int page) {
+    public static void openAuctions(GensouMarket plugin, Player player, int page) {
         List<Auction> auctions = plugin.getAuctionManager().getActiveAuctions();
         openAuctions(plugin, player, auctions, page);
     }
 
-    public static void openAuctions(@SuppressWarnings("unused") GensouMarket plugin, Player player, List<Auction> auctions, int page) {
+    public static void openAuctions(GensouMarket plugin, Player player, List<Auction> auctions, int page) {
 
         GuiHolder holder = new GuiHolder(GuiHolder.GuiType.AUCTION_LIST);
         holder.setData("page", page);
@@ -75,9 +76,13 @@ public final class AuctionGui {
         }
 
         player.openInventory(inv);
+        ViewSessionRegistry registry = plugin.getViewSessionRegistry();
+        if (registry != null) {
+            registry.register(player.getUniqueId(), GuiHolder.GuiType.AUCTION_LIST, 0);
+        }
     }
 
-    public static void openAuctionDetail(@SuppressWarnings("unused") GensouMarket plugin, Player player, Auction auction) {
+    public static void openAuctionDetail(GensouMarket plugin, Player player, Auction auction) {
         GuiHolder holder = new GuiHolder(GuiHolder.GuiType.AUCTION_DETAIL);
         holder.setData("auctionId", auction.getId());
         holder.setData("auction", auction);
@@ -135,6 +140,10 @@ public final class AuctionGui {
                 "&5+20%", Math.round(currentPrice * 1.20 * 100.0) / 100.0));
 
         player.openInventory(inv);
+        ViewSessionRegistry registry = plugin.getViewSessionRegistry();
+        if (registry != null) {
+            registry.register(player.getUniqueId(), GuiHolder.GuiType.AUCTION_DETAIL, auction.getId());
+        }
     }
 
     /**

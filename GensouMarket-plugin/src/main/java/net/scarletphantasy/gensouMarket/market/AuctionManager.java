@@ -207,14 +207,26 @@ public class AuctionManager {
 
                     // 出价成功，回主线程处理经济操作
                     Bukkit.getScheduler().runTask(plugin, () -> {
-                        if (!bidder.isOnline()) return;
+                        // 竞拍者离线时回滚出价，避免白嫖
+                        if (!bidder.isOnline()) {
+                            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                                // 使用乐观锁回滚：仅当价格仍为 amount 时才回滚
+                                boolean rollback = storage.updateAuctionBidIfMatch(
+                                        auctionId, amount, oldPrice, oldBidderUuid, oldBidderName);
+                                if (!rollback) {
+                                    // 回滚失败说明已有新出价，记录警告但不处理（新出价者会负责退款）
+                                    plugin.getLogger().warning("拍卖 #" + auctionId + " 出价者 " +
+                                            bidder.getName() + " 离线，回滚失败（已有新出价）");
+                                }
+                            });
+                            return;
+                        }
 
                         if (!vault.withdraw(bidder, amount)) {
                             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                                auction.setCurrentPrice(oldPrice);
-                                auction.setHighestBidderUuid(oldBidderUuid);
-                                auction.setHighestBidderName(oldBidderName);
-                                storage.updateAuction(auction);
+                                // 使用乐观锁回滚
+                                storage.updateAuctionBidIfMatch(
+                                        auctionId, amount, oldPrice, oldBidderUuid, oldBidderName);
                             });
                             MessageUtil.send(bidder, "&c扣款失败，已取消本次出价！");
                             return;
@@ -455,8 +467,6 @@ public class AuctionManager {
 
                     // 取消成功，回主线程处理退款和物品
                     Bukkit.getScheduler().runTask(plugin, () -> {
-                        if (!player.isOnline()) return;
-
                         // 退还竞拍者金额
                         MailEntry bidderMail = null;
                         if (auction.hasBidder()) {
@@ -496,10 +506,21 @@ public class AuctionManager {
                             }
                         }
 
-                        // 退还物品给卖家
-                        MessageUtil.giveItem(player, auction.getItemStack());
-
-                        MessageUtil.send(player, "&a已取消拍卖 #" + auctionId + "，手续费不退还");
+                        // 退还物品给卖家（离线时进邮箱）
+                        if (player.isOnline()) {
+                            MessageUtil.giveItem(player, auction.getItemStack());
+                            MessageUtil.send(player, "&a已取消拍卖 #" + auctionId + "，手续费不退还");
+                        } else {
+                            MailEntry sellerMail = new MailEntry();
+                            sellerMail.setPlayerUuid(auction.getSellerUuid());
+                            sellerMail.setItemData(auction.getItemData());
+                            sellerMail.setMessage("你取消的拍卖 #" + auctionId + " 物品（取消时已离线）");
+                            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                                storage.saveMail(sellerMail);
+                                publishIfCluster(p -> p.publishMailCreated(auction.getSellerUuid(),
+                                        false, true, sellerMail.getMessage()));
+                            });
+                        }
 
                         // 取消定时任务
                         Integer taskId = scheduledTasks.remove(auctionId);

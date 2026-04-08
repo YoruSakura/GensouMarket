@@ -1,0 +1,22 @@
+# Gradle
+.gradle/
+**/.gradle/
+build/
+**/build/
+out/
+**/out/
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+
+# OS / temp
+.DS_Store
+Thumbs.db
+
+# Sync-conflict noise
+*.sync-conflict-*
+
+# Local helper scripts
+claude-start*.sh

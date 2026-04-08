@@ -120,17 +120,31 @@ public class MarketManager {
                 Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                     boolean cancelled = storage.markListingExpiredIfActive(listingId);
                     Bukkit.getScheduler().runTask(plugin, () -> {
-                        if (!player.isOnline()) return;
                         if (!cancelled) {
-                            MessageUtil.send(player, "&c该物品已不在出售中！");
+                            if (player.isOnline()) {
+                                MessageUtil.send(player, "&c该物品已不在出售中！");
+                            }
                             return;
                         }
                         // 原子取消后更新为 CANCELLED 状态（markListingExpiredIfActive 设置的是 EXPIRED）
                         listing.setStatus(MarketListing.Status.CANCELLED);
                         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.updateListing(listing));
 
-                        MessageUtil.giveItem(player, listing.getItemStack());
-                        MessageUtil.send(player, "&a已成功下架物品 #" + listingId);
+                        // 玩家离线时物品进邮箱
+                        if (player.isOnline()) {
+                            MessageUtil.giveItem(player, listing.getItemStack());
+                            MessageUtil.send(player, "&a已成功下架物品 #" + listingId);
+                        } else {
+                            MailEntry mail = new MailEntry();
+                            mail.setPlayerUuid(playerUuid);
+                            mail.setItemData(listing.getItemData());
+                            mail.setMessage("你下架的物品 #" + listingId + "（下架时已离线）");
+                            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                                storage.saveMail(mail);
+                                publishIfCluster(p -> p.publishMailCreated(playerUuid,
+                                        false, true, mail.getMessage()));
+                            });
+                        }
 
                         // 跨服广播下架
                         publishIfCluster(p -> p.publishListingChanged(listingId, "CANCELLED", listing.getSellerUuid()));
@@ -161,7 +175,8 @@ public class MarketManager {
 
             // 抢占成功，回主线程执行经济操作
             Bukkit.getScheduler().runTask(plugin, () -> {
-                if (!buyer.isOnline()) return;
+                // 买家离线时改为邮箱兜底，不直接返回
+                boolean buyerOnline = buyer.isOnline();
 
                 if (listing.getSellerUuid().equals(buyer.getUniqueId()) && !config.isDebug()) {
                     // 不应购买自己的商品，回滚 DB 状态
@@ -177,6 +192,17 @@ public class MarketManager {
 
                 double totalCost = listing.getPrice();
                 double tax = totalCost * config.getTransactionTax();
+
+                // 买家离线时：余额检查和扣款都跳过，直接回滚
+                if (!buyerOnline) {
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        listing.setStatus(MarketListing.Status.ACTIVE);
+                        listing.setBuyerUuid(null);
+                        listing.setBuyerName(null);
+                        storage.updateListing(listing);
+                    });
+                    return;
+                }
 
                 if (!vault.has(buyer, totalCost)) {
                     // 余额不足，回滚 DB 状态
@@ -203,8 +229,23 @@ public class MarketManager {
 
                 double sellerReceive = totalCost - tax;
 
-                // 给买家物品
-                MessageUtil.giveItem(buyer, listing.getItemStack());
+                // 给买家物品（离线时进邮箱）
+                if (buyerOnline) {
+                    MessageUtil.giveItem(buyer, listing.getItemStack());
+                    MessageUtil.send(buyer, "&a成功购买物品！花费: &e" + MessageUtil.formatMoney(totalCost) +
+                            " &a(含税: &e" + MessageUtil.formatMoney(tax) + "&a)");
+                } else {
+                    // 买家已离线，物品进邮箱
+                    MailEntry buyerMail = new MailEntry();
+                    buyerMail.setPlayerUuid(buyer.getUniqueId());
+                    buyerMail.setItemData(listing.getItemData());
+                    buyerMail.setMessage("你购买的物品（购买时已离线）");
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                        storage.saveMail(buyerMail);
+                        publishIfCluster(p -> p.publishMailCreated(buyer.getUniqueId(),
+                                false, true, buyerMail.getMessage()));
+                    });
+                }
 
                 // 给卖家钱
                 Player seller = Bukkit.getPlayer(listing.getSellerUuid());
@@ -229,9 +270,6 @@ public class MarketManager {
                     mail = createMoneyMail(listing.getSellerUuid(), sellerReceive,
                             "你上架的物品已被 " + buyer.getName() + " 购买");
                 }
-
-                MessageUtil.send(buyer, "&a成功购买物品！花费: &e" + MessageUtil.formatMoney(totalCost) +
-                        " &a(含税: &e" + MessageUtil.formatMoney(tax) + "&a)");
 
                 // 异步写邮箱（listing 状态已在原子操作中更新，无需再 updateListing）
                 final MailEntry finalMail = mail;
