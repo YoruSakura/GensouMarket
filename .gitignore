@@ -20,3 +20,10 @@ Thumbs.db
 
 # Local helper scripts
 claude-start*.sh
+
+# Local release / development docs
+Claude.md
+MC插件开发踩坑总结.md
+Velocity插件架构规划.md
+正式版终验清单.md
+跨服GUI注册一致性专项测试.md
