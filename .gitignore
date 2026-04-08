@@ -22,6 +22,7 @@ Thumbs.db
 claude-start*.sh
 
 # Local release / development docs
+1.1版本开发想法.md
 Claude.md
 MC插件开发踩坑总结.md
 Velocity插件架构规划.md
