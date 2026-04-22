@@ -26,6 +26,7 @@ public class SQLiteStorage implements StorageProvider {
         connection = DriverManager.getConnection("jdbc:sqlite:" + dbFile.getAbsolutePath());
         connection.setAutoCommit(true);
         createTables();
+        migrateSchema();
         migrateShopToRecycle();
     }
 
@@ -68,7 +69,11 @@ public class SQLiteStorage implements StorageProvider {
                 "total_sold INTEGER NOT NULL DEFAULT 0," +
                 "buy_multiplier REAL NOT NULL DEFAULT 1.0," +
                 "sell_multiplier REAL NOT NULL DEFAULT 1.0," +
-                "last_update INTEGER NOT NULL)"
+                "last_update INTEGER NOT NULL," +
+                "mode TEXT NOT NULL DEFAULT 'FIXED'," +
+                "stock_mode TEXT NOT NULL DEFAULT 'UNLIMITED'," +
+                "available_stock INTEGER NOT NULL DEFAULT -1," +
+                "recycle_source_id TEXT)"
             );
             stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS recycle_data (" +
@@ -77,7 +82,8 @@ public class SQLiteStorage implements StorageProvider {
                 "base_recycle_price REAL NOT NULL," +
                 "total_recycled INTEGER NOT NULL DEFAULT 0," +
                 "recycle_multiplier REAL NOT NULL DEFAULT 1.0," +
-                "last_update INTEGER NOT NULL)"
+                "last_update INTEGER NOT NULL," +
+                "recycled_stock INTEGER NOT NULL DEFAULT 0)"
             );
             stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS player_mail (" +
@@ -89,6 +95,35 @@ public class SQLiteStorage implements StorageProvider {
                 "timestamp INTEGER NOT NULL," +
                 "claimed INTEGER NOT NULL DEFAULT 0)"
             );
+        }
+    }
+
+    /**
+     * 对旧版数据库补齐 task-05 新增列。SQLite 不支持 ADD COLUMN IF NOT EXISTS，用 try-catch 逐列检查。
+     */
+    private void migrateSchema() {
+        addColumnIfMissing("shop_data", "mode", "TEXT NOT NULL DEFAULT 'FIXED'");
+        addColumnIfMissing("shop_data", "stock_mode", "TEXT NOT NULL DEFAULT 'UNLIMITED'");
+        addColumnIfMissing("shop_data", "available_stock", "INTEGER NOT NULL DEFAULT -1");
+        addColumnIfMissing("shop_data", "recycle_source_id", "TEXT");
+        addColumnIfMissing("recycle_data", "recycled_stock", "INTEGER NOT NULL DEFAULT 0");
+    }
+
+    private void addColumnIfMissing(String table, String column, String definition) {
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (rs.next()) {
+                if (column.equalsIgnoreCase(rs.getString("name"))) return;
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 检查 " + table + "." + column + " 失败", e);
+            return;
+        }
+        try (Statement stmt = connection.createStatement()) {
+            stmt.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+            LOGGER.info("[SQLite] 已补齐列 " + table + "." + column);
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 添加 " + table + "." + column + " 失败", e);
         }
     }
 
@@ -389,17 +424,9 @@ public class SQLiteStorage implements StorageProvider {
 
     @Override
     public void saveShopData(ShopItem item) {
-        String sql = "INSERT OR REPLACE INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update) VALUES (?,?,?,?,?,?,?,?,?)";
+        String sql = "INSERT OR REPLACE INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
-            ps.setString(1, item.getId());
-            ps.setString(2, item.getMaterial().name());
-            ps.setDouble(3, item.getBaseBuyPrice());
-            ps.setDouble(4, 0);
-            ps.setInt(5, item.getTotalBought());
-            ps.setInt(6, 0);
-            ps.setDouble(7, 1.0);
-            ps.setDouble(8, 1.0);
-            ps.setLong(9, item.getLastUpdate());
+            bindShopItem(ps, item);
             ps.executeUpdate();
         } catch (SQLException e) {
             LOGGER.log(Level.WARNING, "[SQLite] 保存商店数据失败", e);
@@ -408,18 +435,10 @@ public class SQLiteStorage implements StorageProvider {
 
     @Override
     public void saveAllShopData(Map<String, ShopItem> items) {
-        String sql = "INSERT OR REPLACE INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update) VALUES (?,?,?,?,?,?,?,?,?)";
+        String sql = "INSERT OR REPLACE INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             for (ShopItem item : items.values()) {
-                ps.setString(1, item.getId());
-                ps.setString(2, item.getMaterial().name());
-                ps.setDouble(3, item.getBaseBuyPrice());
-                ps.setDouble(4, 0);
-                ps.setInt(5, item.getTotalBought());
-                ps.setInt(6, 0);
-                ps.setDouble(7, 1.0);
-                ps.setDouble(8, 1.0);
-                ps.setLong(9, item.getLastUpdate());
+                bindShopItem(ps, item);
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -428,10 +447,26 @@ public class SQLiteStorage implements StorageProvider {
         }
     }
 
+    private void bindShopItem(PreparedStatement ps, ShopItem item) throws SQLException {
+        ps.setString(1, item.getId());
+        ps.setString(2, item.getMaterial().name());
+        ps.setDouble(3, item.getBaseBuyPrice());
+        ps.setDouble(4, 0);
+        ps.setInt(5, item.getTotalBought());
+        ps.setInt(6, 0);
+        ps.setDouble(7, 1.0);
+        ps.setDouble(8, item.getSellMultiplier());
+        ps.setLong(9, item.getLastUpdate());
+        ps.setString(10, item.getMode().name());
+        ps.setString(11, item.getStockMode().name());
+        ps.setInt(12, item.getAvailableStock());
+        ps.setString(13, item.getRecycleSourceId());
+    }
+
     @Override
     public Map<String, ShopItem> loadShopData() {
         Map<String, ShopItem> map = new LinkedHashMap<>();
-        String sql = "SELECT item_id, material, base_buy_price, total_bought, last_update FROM shop_data";
+        String sql = "SELECT item_id, material, base_buy_price, sell_multiplier, total_bought, last_update, mode, stock_mode, available_stock, recycle_source_id FROM shop_data";
         try (Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             while (rs.next()) {
@@ -441,6 +476,17 @@ public class SQLiteStorage implements StorageProvider {
                 ShopItem item = new ShopItem(id, mat, rs.getDouble("base_buy_price"));
                 item.setTotalBought(rs.getInt("total_bought"));
                 item.setLastUpdate(rs.getLong("last_update"));
+                String modeStr = rs.getString("mode");
+                if (modeStr != null) {
+                    try { item.setMode(ShopItem.Mode.valueOf(modeStr)); } catch (IllegalArgumentException ignored) {}
+                }
+                String stockModeStr = rs.getString("stock_mode");
+                if (stockModeStr != null) {
+                    try { item.setStockMode(ShopItem.StockMode.valueOf(stockModeStr)); } catch (IllegalArgumentException ignored) {}
+                }
+                item.setAvailableStock(rs.getInt("available_stock"));
+                item.setRecycleSourceId(rs.getString("recycle_source_id"));
+                item.setSellMultiplier(rs.getDouble("sell_multiplier"));
                 map.put(id, item);
             }
         } catch (SQLException e) {
@@ -453,7 +499,7 @@ public class SQLiteStorage implements StorageProvider {
 
     @Override
     public void saveRecycleData(RecycleItem item) {
-        String sql = "INSERT OR REPLACE INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update) VALUES (?,?,?,?,?,?)";
+        String sql = "INSERT OR REPLACE INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock) VALUES (?,?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, item.getId());
             ps.setString(2, item.getMaterial().name());
@@ -461,6 +507,7 @@ public class SQLiteStorage implements StorageProvider {
             ps.setInt(4, item.getTotalRecycled());
             ps.setDouble(5, item.getRecycleMultiplier());
             ps.setLong(6, item.getLastUpdate());
+            ps.setInt(7, item.getRecycledStock());
             ps.executeUpdate();
         } catch (SQLException e) {
             LOGGER.log(Level.WARNING, "[SQLite] 保存回收数据失败", e);
@@ -469,7 +516,7 @@ public class SQLiteStorage implements StorageProvider {
 
     @Override
     public void saveAllRecycleData(Map<String, RecycleItem> items) {
-        String sql = "INSERT OR REPLACE INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update) VALUES (?,?,?,?,?,?)";
+        String sql = "INSERT OR REPLACE INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock) VALUES (?,?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             for (RecycleItem item : items.values()) {
                 ps.setString(1, item.getId());
@@ -478,6 +525,7 @@ public class SQLiteStorage implements StorageProvider {
                 ps.setInt(4, item.getTotalRecycled());
                 ps.setDouble(5, item.getRecycleMultiplier());
                 ps.setLong(6, item.getLastUpdate());
+                ps.setInt(7, item.getRecycledStock());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -500,6 +548,7 @@ public class SQLiteStorage implements StorageProvider {
                 item.setTotalRecycled(rs.getInt("total_recycled"));
                 item.setRecycleMultiplier(rs.getDouble("recycle_multiplier"));
                 item.setLastUpdate(rs.getLong("last_update"));
+                item.setRecycledStock(rs.getInt("recycled_stock"));
                 map.put(id, item);
             }
         } catch (SQLException e) {

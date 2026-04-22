@@ -31,19 +31,22 @@ public class RemoteActionHandler {
     }
 
     public void handle(IncomingPacket packet) {
+        // 被动同步入口：PLAYER_NOTIFY/REMOTE_DEPOSIT/REMOTE_GIVE_ITEM/MAIL_CREATED
+        // 必须独立于本地模块开关，以保证跨服结果总能落地。
+        // GUI 刷新类则按对应模块开关门控（模块关闭时本地不应打开相关 GUI）。
         switch (packet.type()) {
             case PLAYER_NOTIFY -> handlePlayerNotify(packet.payload());
             case REMOTE_DEPOSIT -> handleRemoteDeposit(packet);
             case REMOTE_GIVE_ITEM -> handleRemoteGiveItem(packet);
             case MAIL_CREATED -> handleMailCreated(packet.payload());
-            case REFRESH_MARKET_VIEW -> handleRefreshMarketView();
-            case REFRESH_AUCTION_VIEW -> handleRefreshAuctionView(packet.payload());
+            case REFRESH_MARKET_VIEW -> { if (plugin.getConfigManager().isMarketEnabled()) handleRefreshMarketView(); }
+            case REFRESH_AUCTION_VIEW -> { if (plugin.getConfigManager().isAuctionEnabled()) handleRefreshAuctionView(packet.payload()); }
             case MARKET_LISTING_SOLD -> handleMarketListingSold(packet.payload());
             case MARKET_LISTING_CHANGED -> handleMarketListingChanged(packet.payload());
-            case AUCTION_BID_UPDATED -> handleAuctionBidUpdated(packet.payload());
-            case AUCTION_ENDED -> handleAuctionEnded(packet.payload());
-            case AUCTION_CANCELLED -> handleAuctionCancelled(packet.payload());
-            case AUCTION_CREATED -> handleRefreshAuctionList();
+            case AUCTION_BID_UPDATED -> { if (plugin.getConfigManager().isAuctionEnabled()) handleAuctionBidUpdated(packet.payload()); }
+            case AUCTION_ENDED -> { if (plugin.getConfigManager().isAuctionEnabled()) handleAuctionEnded(packet.payload()); }
+            case AUCTION_CANCELLED -> { if (plugin.getConfigManager().isAuctionEnabled()) handleAuctionCancelled(packet.payload()); }
+            case AUCTION_CREATED -> { if (plugin.getConfigManager().isAuctionEnabled()) handleRefreshAuctionList(); }
             default -> plugin.getLogger().fine("忽略跨服消息类型: " + packet.type());
         }
     }
@@ -142,12 +145,23 @@ public class RemoteActionHandler {
     // ========== 市场事件处理 ==========
 
     private void handleMarketListingSold(Map<String, String> payload) {
-        // 刷新市场 GUI
-        handleRefreshMarketView();
+        if (plugin.getConfigManager().isMarketEnabled()) {
+            handleRefreshMarketView();
+        }
+        UUID sellerUuid = parseUuid(payload.get("sellerUuid"));
+        if (plugin.getConfigManager().isPersonalShopEnabled() && sellerUuid != null) {
+            refreshPersonalShopView(sellerUuid);
+        }
     }
 
     private void handleMarketListingChanged(Map<String, String> payload) {
-        handleRefreshMarketView();
+        if (plugin.getConfigManager().isMarketEnabled()) {
+            handleRefreshMarketView();
+        }
+        UUID sellerUuid = parseUuid(payload.get("sellerUuid"));
+        if (plugin.getConfigManager().isPersonalShopEnabled() && sellerUuid != null) {
+            refreshPersonalShopView(sellerUuid);
+        }
     }
 
     // ========== 拍卖事件处理 ==========
@@ -185,6 +199,47 @@ public class RemoteActionHandler {
                     }
                 }
             });
+        });
+    }
+
+    /**
+     * 刷新查看指定卖家个人商店的玩家。刷到第一页。
+     * 内部捕获异常，避免影响其他刷新链路。
+     */
+    private void refreshPersonalShopView(UUID sellerUuid) {
+        List<UUID> viewers = viewRegistry.getPersonalShopViewers(sellerUuid);
+        if (viewers.isEmpty()) return;
+
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                List<MarketListing> all = plugin.getStorage().getPlayerListings(sellerUuid);
+                List<MarketListing> active = new java.util.ArrayList<>();
+                for (MarketListing l : all) {
+                    if (l.getStatus() == MarketListing.Status.ACTIVE) active.add(l);
+                }
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    for (UUID uuid : viewers) {
+                        Player player = Bukkit.getPlayer(uuid);
+                        if (player == null || !player.isOnline()) continue;
+                        try {
+                            if (active.isEmpty()) {
+                                player.closeInventory();
+                                MessageUtil.send(player, "&e该卖家当前已无在售物品。");
+                            } else {
+                                String sellerName = active.get(0).getSellerName();
+                                MarketGui.openPersonalShop(plugin, player, sellerUuid,
+                                        sellerName != null ? sellerName : "?", active, 0);
+                            }
+                        } catch (Exception e) {
+                            plugin.getLogger().log(Level.WARNING,
+                                    "刷新玩家 " + uuid + " 的个人商店页失败", e);
+                        }
+                    }
+                });
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.WARNING,
+                        "加载卖家 " + sellerUuid + " 的上架用于刷新个人商店失败", e);
+            }
         });
     }
 

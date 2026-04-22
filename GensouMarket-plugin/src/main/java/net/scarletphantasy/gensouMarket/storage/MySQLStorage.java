@@ -51,6 +51,7 @@ public class MySQLStorage implements StorageProvider {
 
         try (Connection conn = getConnection()) {
             createTables(conn);
+            migrateSchema(conn);
             migrateShopToRecycle(conn);
         }
     }
@@ -119,7 +120,11 @@ public class MySQLStorage implements StorageProvider {
                 "total_sold INT NOT NULL DEFAULT 0," +
                 "buy_multiplier DOUBLE NOT NULL DEFAULT 1.0," +
                 "sell_multiplier DOUBLE NOT NULL DEFAULT 1.0," +
-                "last_update BIGINT NOT NULL) DEFAULT CHARSET=utf8mb4"
+                "last_update BIGINT NOT NULL," +
+                "mode VARCHAR(16) NOT NULL DEFAULT 'FIXED'," +
+                "stock_mode VARCHAR(16) NOT NULL DEFAULT 'UNLIMITED'," +
+                "available_stock INT NOT NULL DEFAULT -1," +
+                "recycle_source_id VARCHAR(64)) DEFAULT CHARSET=utf8mb4"
             );
             stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS recycle_data (" +
@@ -128,7 +133,8 @@ public class MySQLStorage implements StorageProvider {
                 "base_recycle_price DOUBLE NOT NULL," +
                 "total_recycled INT NOT NULL DEFAULT 0," +
                 "recycle_multiplier DOUBLE NOT NULL DEFAULT 1.0," +
-                "last_update BIGINT NOT NULL) DEFAULT CHARSET=utf8mb4"
+                "last_update BIGINT NOT NULL," +
+                "recycled_stock INT NOT NULL DEFAULT 0) DEFAULT CHARSET=utf8mb4"
             );
             stmt.executeUpdate(
                 "CREATE TABLE IF NOT EXISTS player_mail (" +
@@ -446,24 +452,52 @@ public class MySQLStorage implements StorageProvider {
         }
     }
 
+    /**
+     * 对旧版数据库补齐 task-05 新增列。使用 information_schema 检测以兼容各版本 MySQL。
+     */
+    private void migrateSchema(Connection conn) {
+        addColumnIfMissing(conn, "shop_data", "mode", "VARCHAR(16) NOT NULL DEFAULT 'FIXED'");
+        addColumnIfMissing(conn, "shop_data", "stock_mode", "VARCHAR(16) NOT NULL DEFAULT 'UNLIMITED'");
+        addColumnIfMissing(conn, "shop_data", "available_stock", "INT NOT NULL DEFAULT -1");
+        addColumnIfMissing(conn, "shop_data", "recycle_source_id", "VARCHAR(64)");
+        addColumnIfMissing(conn, "recycle_data", "recycled_stock", "INT NOT NULL DEFAULT 0");
+    }
+
+    private void addColumnIfMissing(Connection conn, String table, String column, String definition) {
+        String check = "SELECT COUNT(*) FROM information_schema.COLUMNS " +
+                "WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND COLUMN_NAME=?";
+        try (PreparedStatement ps = conn.prepareStatement(check)) {
+            ps.setString(1, database);
+            ps.setString(2, table);
+            ps.setString(3, column);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next() && rs.getInt(1) > 0) return;
+            }
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 检查 " + table + "." + column + " 失败", e);
+            return;
+        }
+        try (Statement stmt = conn.createStatement()) {
+            stmt.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+            LOGGER.info("[MySQL] 已补齐列 " + table + "." + column);
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 添加 " + table + "." + column + " 失败", e);
+        }
+    }
+
     // ---- Shop Data ----
 
     @Override
     public void saveShopData(ShopItem item) {
-        String sql = "INSERT INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update) " +
-                "VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE " +
-                "total_bought=VALUES(total_bought), last_update=VALUES(last_update)";
+        String sql = "INSERT INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) " +
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE " +
+                "total_bought=VALUES(total_bought), last_update=VALUES(last_update), " +
+                "mode=VALUES(mode), stock_mode=VALUES(stock_mode), available_stock=VALUES(available_stock), " +
+                "recycle_source_id=VALUES(recycle_source_id), sell_multiplier=VALUES(sell_multiplier), " +
+                "base_buy_price=VALUES(base_buy_price)";
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, item.getId());
-            ps.setString(2, item.getMaterial().name());
-            ps.setDouble(3, item.getBaseBuyPrice());
-            ps.setDouble(4, 0);
-            ps.setInt(5, item.getTotalBought());
-            ps.setInt(6, 0);
-            ps.setDouble(7, 1.0);
-            ps.setDouble(8, 1.0);
-            ps.setLong(9, item.getLastUpdate());
+            bindShopItem(ps, item);
             ps.executeUpdate();
         } catch (SQLException e) {
             logThrottled("[MySQL] 保存商店数据失败", e);
@@ -472,21 +506,16 @@ public class MySQLStorage implements StorageProvider {
 
     @Override
     public void saveAllShopData(Map<String, ShopItem> items) {
-        String sql = "INSERT INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update) " +
-                "VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE " +
-                "total_bought=VALUES(total_bought), last_update=VALUES(last_update)";
+        String sql = "INSERT INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) " +
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE " +
+                "total_bought=VALUES(total_bought), last_update=VALUES(last_update), " +
+                "mode=VALUES(mode), stock_mode=VALUES(stock_mode), available_stock=VALUES(available_stock), " +
+                "recycle_source_id=VALUES(recycle_source_id), sell_multiplier=VALUES(sell_multiplier), " +
+                "base_buy_price=VALUES(base_buy_price)";
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             for (ShopItem item : items.values()) {
-                ps.setString(1, item.getId());
-                ps.setString(2, item.getMaterial().name());
-                ps.setDouble(3, item.getBaseBuyPrice());
-                ps.setDouble(4, 0);
-                ps.setInt(5, item.getTotalBought());
-                ps.setInt(6, 0);
-                ps.setDouble(7, 1.0);
-                ps.setDouble(8, 1.0);
-                ps.setLong(9, item.getLastUpdate());
+                bindShopItem(ps, item);
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -495,10 +524,26 @@ public class MySQLStorage implements StorageProvider {
         }
     }
 
+    private void bindShopItem(PreparedStatement ps, ShopItem item) throws SQLException {
+        ps.setString(1, item.getId());
+        ps.setString(2, item.getMaterial().name());
+        ps.setDouble(3, item.getBaseBuyPrice());
+        ps.setDouble(4, 0);
+        ps.setInt(5, item.getTotalBought());
+        ps.setInt(6, 0);
+        ps.setDouble(7, 1.0);
+        ps.setDouble(8, item.getSellMultiplier());
+        ps.setLong(9, item.getLastUpdate());
+        ps.setString(10, item.getMode().name());
+        ps.setString(11, item.getStockMode().name());
+        ps.setInt(12, item.getAvailableStock());
+        ps.setString(13, item.getRecycleSourceId());
+    }
+
     @Override
     public Map<String, ShopItem> loadShopData() {
         Map<String, ShopItem> map = new LinkedHashMap<>();
-        String sql = "SELECT item_id, material, base_buy_price, total_bought, last_update FROM shop_data";
+        String sql = "SELECT item_id, material, base_buy_price, sell_multiplier, total_bought, last_update, mode, stock_mode, available_stock, recycle_source_id FROM shop_data";
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
@@ -509,6 +554,17 @@ public class MySQLStorage implements StorageProvider {
                 ShopItem item = new ShopItem(id, mat, rs.getDouble("base_buy_price"));
                 item.setTotalBought(rs.getInt("total_bought"));
                 item.setLastUpdate(rs.getLong("last_update"));
+                String modeStr = rs.getString("mode");
+                if (modeStr != null) {
+                    try { item.setMode(ShopItem.Mode.valueOf(modeStr)); } catch (IllegalArgumentException ignored) {}
+                }
+                String stockModeStr = rs.getString("stock_mode");
+                if (stockModeStr != null) {
+                    try { item.setStockMode(ShopItem.StockMode.valueOf(stockModeStr)); } catch (IllegalArgumentException ignored) {}
+                }
+                item.setAvailableStock(rs.getInt("available_stock"));
+                item.setRecycleSourceId(rs.getString("recycle_source_id"));
+                item.setSellMultiplier(rs.getDouble("sell_multiplier"));
                 map.put(id, item);
             }
         } catch (SQLException e) {
@@ -521,9 +577,10 @@ public class MySQLStorage implements StorageProvider {
 
     @Override
     public void saveRecycleData(RecycleItem item) {
-        String sql = "INSERT INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update) " +
-                "VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE " +
-                "total_recycled=VALUES(total_recycled), recycle_multiplier=VALUES(recycle_multiplier), last_update=VALUES(last_update)";
+        String sql = "INSERT INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock) " +
+                "VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE " +
+                "total_recycled=VALUES(total_recycled), recycle_multiplier=VALUES(recycle_multiplier), last_update=VALUES(last_update), " +
+                "recycled_stock=VALUES(recycled_stock), base_recycle_price=VALUES(base_recycle_price)";
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, item.getId());
@@ -532,6 +589,7 @@ public class MySQLStorage implements StorageProvider {
             ps.setInt(4, item.getTotalRecycled());
             ps.setDouble(5, item.getRecycleMultiplier());
             ps.setLong(6, item.getLastUpdate());
+            ps.setInt(7, item.getRecycledStock());
             ps.executeUpdate();
         } catch (SQLException e) {
             logThrottled("[MySQL] 保存回收数据失败", e);
@@ -540,9 +598,10 @@ public class MySQLStorage implements StorageProvider {
 
     @Override
     public void saveAllRecycleData(Map<String, RecycleItem> items) {
-        String sql = "INSERT INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update) " +
-                "VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE " +
-                "total_recycled=VALUES(total_recycled), recycle_multiplier=VALUES(recycle_multiplier), last_update=VALUES(last_update)";
+        String sql = "INSERT INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock) " +
+                "VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE " +
+                "total_recycled=VALUES(total_recycled), recycle_multiplier=VALUES(recycle_multiplier), last_update=VALUES(last_update), " +
+                "recycled_stock=VALUES(recycled_stock), base_recycle_price=VALUES(base_recycle_price)";
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             for (RecycleItem item : items.values()) {
@@ -552,6 +611,7 @@ public class MySQLStorage implements StorageProvider {
                 ps.setInt(4, item.getTotalRecycled());
                 ps.setDouble(5, item.getRecycleMultiplier());
                 ps.setLong(6, item.getLastUpdate());
+                ps.setInt(7, item.getRecycledStock());
                 ps.addBatch();
             }
             ps.executeBatch();
@@ -575,6 +635,7 @@ public class MySQLStorage implements StorageProvider {
                 item.setTotalRecycled(rs.getInt("total_recycled"));
                 item.setRecycleMultiplier(rs.getDouble("recycle_multiplier"));
                 item.setLastUpdate(rs.getLong("last_update"));
+                try { item.setRecycledStock(rs.getInt("recycled_stock")); } catch (SQLException ignored) {}
                 map.put(id, item);
             }
         } catch (SQLException e) {

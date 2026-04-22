@@ -601,6 +601,9 @@ public class AuctionManager {
         long now = System.currentTimeMillis();
 
         for (Auction auction : active) {
+            // 幂等：同一拍卖已存在定时器则跳过
+            if (scheduledTasks.containsKey(auction.getId())) continue;
+
             long remaining = auction.getEndTime() - now;
             if (remaining <= 0) {
                 Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> endAuctionAsync(auction));
@@ -619,6 +622,29 @@ public class AuctionManager {
 
         if (!active.isEmpty()) {
             plugin.getLogger().info("已恢复 " + active.size() + " 个活跃拍卖的定时任务");
+        }
+    }
+
+    /**
+     * 取消所有内存中的拍卖结束定时任务。不改数据库状态，不取消拍卖本身。
+     */
+    public void cancelAllScheduledTasks() {
+        for (Integer taskId : scheduledTasks.values()) {
+            Bukkit.getScheduler().cancelTask(taskId);
+        }
+        scheduledTasks.clear();
+    }
+
+    /**
+     * 根据当前 auction.enabled 配置同步拍卖调度状态。
+     * 用于启动和 /gmarket reload 后把内存定时器与配置对齐。
+     * - enabled=true: 清理并重建活跃拍卖定时器（幂等）
+     * - enabled=false: 取消所有定时器（拍卖本身不变）
+     */
+    public void applyModuleState() {
+        cancelAllScheduledTasks();
+        if (config.isAuctionEnabled()) {
+            restoreActiveAuctions();
         }
     }
 

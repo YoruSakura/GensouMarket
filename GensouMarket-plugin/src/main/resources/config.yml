@@ -15,6 +15,8 @@ storage:
 
 # 全球市场配置
 market:
+  # 是否启用全球市场入口 (关闭后该子服不再提供市场命令/菜单，但仍接收跨服售出等被动结果)
+  enabled: true
   # 上架税率 (0.05 = 5%)
   listing-tax: 0.05
   # 交易税率
@@ -26,6 +28,8 @@ market:
 
 # 拍卖配置
 auction:
+  # 是否启用拍卖入口 (关闭后该子服不再提供拍卖命令/菜单，但仍接收跨服拍卖结算等被动结果)
+  enabled: true
   # 默认拍卖时长 (分钟)
   default-duration: 60
   # 最短拍卖时长 (分钟)
@@ -34,6 +38,17 @@ auction:
   max-duration: 1440
   # 拍卖上架手续费比例 (基于起拍价, 0.05 = 5%, 设为0关闭)
   listing-fee-rate: 0.05
+
+# 邮箱配置
+mail:
+  # 是否在主菜单/帮助/Tab 补全中曝光邮箱入口。
+  # 注意：邮箱是底层被动同步能力，/gmarket collect 始终可领取，本开关不影响资产领取与底层邮件写入。
+  enabled: true
+
+# 个人商店配置
+personal-shop:
+  # 是否启用个人商店视图 (按卖家过滤的市场视图)
+  enabled: true
 
 # 服务器商店配置（服务器卖给玩家）
 shop:

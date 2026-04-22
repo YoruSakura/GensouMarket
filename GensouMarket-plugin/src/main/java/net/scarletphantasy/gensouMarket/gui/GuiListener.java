@@ -20,6 +20,7 @@ import org.bukkit.inventory.ItemStack;
 
 import net.scarletphantasy.gensouMarket.util.MessageUtil;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -78,6 +79,7 @@ public class GuiListener implements Listener {
         switch (holder.getType()) {
             case MAIN_MENU -> handleMainMenu(player, slot);
             case MARKET_BROWSE -> handleMarketBrowse(player, holder, slot, event);
+            case PERSONAL_SHOP -> handlePersonalShop(player, holder, slot, event);
             case SHOP -> handleShop(player, holder, slot, event);
             case RECYCLE -> handleRecycle(player, holder, slot, event);
             case AUCTION_LIST -> handleAuctionList(player, holder, slot);
@@ -283,25 +285,58 @@ public class GuiListener implements Listener {
     }
 
     private void handleMainMenu(Player player, int slot) {
+        var cm = plugin.getConfigManager();
         switch (slot) {
-            case 10 -> Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                List<MarketListing> listings = plugin.getMarketManager().getActiveListings();
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (player.isOnline()) {
-                        MarketGui.openMarketBrowse(plugin, player, listings, 0);
+            case 4 -> {
+                if (!cm.isPersonalShopEnabled()) return;
+                UUID sellerUuid = player.getUniqueId();
+                String sellerName = player.getName();
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    List<MarketListing> all = plugin.getStorage().getPlayerListings(sellerUuid);
+                    List<MarketListing> active = new ArrayList<>();
+                    for (MarketListing l : all) {
+                        if (l.getStatus() == MarketListing.Status.ACTIVE) active.add(l);
                     }
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (!player.isOnline()) return;
+                        if (active.isEmpty()) {
+                            MessageUtil.send(player, "&e你当前没有在售物品！");
+                            return;
+                        }
+                        MarketGui.openPersonalShop(plugin, player, sellerUuid, sellerName, active, 0);
+                    });
                 });
-            });
-            case 12 -> Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                List<Auction> auctions = plugin.getAuctionManager().getActiveAuctions();
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (player.isOnline()) {
-                        AuctionGui.openAuctions(plugin, player, auctions, 0);
-                    }
+            }
+            case 10 -> {
+                if (!cm.isMarketEnabled()) return;
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    List<MarketListing> listings = plugin.getMarketManager().getActiveListings();
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (player.isOnline()) {
+                            MarketGui.openMarketBrowse(plugin, player, listings, 0);
+                        }
+                    });
                 });
-            });
-            case 14 -> ShopGui.openShop(plugin, player, 0);
-            case 16 -> RecycleGui.openRecycle(plugin, player, 0);
+            }
+            case 12 -> {
+                if (!cm.isAuctionEnabled()) return;
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    List<Auction> auctions = plugin.getAuctionManager().getActiveAuctions();
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (player.isOnline()) {
+                            AuctionGui.openAuctions(plugin, player, auctions, 0);
+                        }
+                    });
+                });
+            }
+            case 14 -> {
+                if (!cm.isShopEnabled()) return;
+                ShopGui.openShop(plugin, player, 0);
+            }
+            case 16 -> {
+                if (!cm.isRecycleEnabled()) return;
+                RecycleGui.openRecycle(plugin, player, 0);
+            }
         }
     }
 
@@ -337,6 +372,51 @@ public class GuiListener implements Listener {
                 } else if (event.isLeftClick()) {
                     if (!isOwn || plugin.getConfigManager().isDebug()) {
                         if (!checkConfirmation(player, "market_buy", listing.getId(),
+                                "&e再次点击确认购买，价格: &6" + MessageUtil.formatMoney(listing.getPrice()))) {
+                            return;
+                        }
+                    }
+                    player.closeInventory();
+                    plugin.getMarketManager().buyListing(player, listing.getId());
+                }
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void handlePersonalShop(Player player, GuiHolder holder, int slot, InventoryClickEvent event) {
+        int page = holder.getIntData("page", 0);
+        List<MarketListing> listings = (List<MarketListing>) holder.getData("listings");
+        UUID sellerUuid = (UUID) holder.getData("sellerUuid");
+        String sellerName = (String) holder.getData("sellerName");
+
+        if (slot == 45 && page > 0) {
+            MarketGui.openPersonalShop(plugin, player, sellerUuid, sellerName, listings, page - 1);
+            return;
+        }
+        if (slot == 49) {
+            MarketGui.openMainMenu(plugin, player);
+            return;
+        }
+        if (slot == 53) {
+            int totalPages = (int) Math.ceil((double) listings.size() / 45);
+            if (page < totalPages - 1) {
+                MarketGui.openPersonalShop(plugin, player, sellerUuid, sellerName, listings, page + 1);
+            }
+            return;
+        }
+
+        if (slot >= 0 && slot < 45) {
+            int index = page * 45 + slot;
+            if (index < listings.size()) {
+                MarketListing listing = listings.get(index);
+                boolean isOwn = listing.getSellerUuid().equals(player.getUniqueId());
+                if (event.isRightClick() && isOwn) {
+                    player.closeInventory();
+                    plugin.getMarketManager().cancelListing(player, listing.getId());
+                } else if (event.isLeftClick()) {
+                    if (!isOwn || plugin.getConfigManager().isDebug()) {
+                        if (!checkConfirmation(player, "personal_buy", listing.getId(),
                                 "&e再次点击确认购买，价格: &6" + MessageUtil.formatMoney(listing.getPrice()))) {
                             return;
                         }

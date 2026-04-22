@@ -1,17 +1,36 @@
 # ==============================
 # 幻想集市 - 服务器商店物品配置
 # ==============================
-# 服务器卖给玩家的物品，价格固定
+# 服务器卖给玩家的物品支持两种模式：
+#   - fixed:    管理员固定出售。价格固定，库存可为无限或有限。
+#   - recycled: 回收回流出售。库存来自对应回收物品的回流库存池，售价按"当前回收价 × sell-multiplier"计算。
 #
-# 格式:
-#   物品ID:
-#     material: Bukkit Material 名称
-#     buy-price: 玩家从商店购买的价格（固定）
+# 通用字段:
+#   material:         Bukkit Material 名称
+#   mode:             fixed 或 recycled
+#
+# mode=fixed 必须字段:
+#   buy-price:        玩家购买价格（固定）
+#   stock-mode:       unlimited 或 limited
+#
+# mode=fixed + stock-mode=limited 额外字段:
+#   initial-stock:    初始库存（仅在没有持久化库存记录时生效；之后以 DB 的 available-stock 为准）
+#
+# mode=recycled 必须字段:
+#   recycle-source:   recycle.yml 中某个物品 id，售卖库存从该 RecycleItem.recycled-stock 消费
+#   sell-multiplier:  售价倍率（当前售价 = 当前回收价 × sell-multiplier，下限 0.01）
+#
+# 旧配置兼容：缺少 mode 字段时默认按 fixed + unlimited 处理。
+# /gmarket shop add <价格> 只创建 fixed + unlimited 商品。
 
 items:
   diamond:
     material: DIAMOND
+    mode: fixed
     buy-price: 1000.0
+    stock-mode: unlimited
   iron_ingot:
     material: IRON_INGOT
+    mode: fixed
     buy-price: 50.0
+    stock-mode: unlimited

@@ -1,7 +1,6 @@
 package net.scarletphantasy.gensouMarket.bridge;
 
 import net.scarletphantasy.gensouMarket.gui.GuiHolder;
-import org.bukkit.entity.Player;
 
 import java.util.Map;
 import java.util.UUID;
@@ -13,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class ViewSessionRegistry {
 
-    private record ViewSession(GuiHolder.GuiType guiType, int relatedId) {}
+    private record ViewSession(GuiHolder.GuiType guiType, int relatedId, UUID sellerUuid) {}
 
     // playerUuid -> ViewSession
     private final Map<UUID, ViewSession> sessions = new ConcurrentHashMap<>();
@@ -22,7 +21,14 @@ public class ViewSessionRegistry {
      * 记录玩家正在查看的 GUI。
      */
     public void register(UUID playerUuid, GuiHolder.GuiType guiType, int relatedId) {
-        sessions.put(playerUuid, new ViewSession(guiType, relatedId));
+        sessions.put(playerUuid, new ViewSession(guiType, relatedId, null));
+    }
+
+    /**
+     * 记录玩家正在查看的个人商店，关联卖家 UUID。
+     */
+    public void registerPersonalShop(UUID playerUuid, UUID sellerUuid) {
+        sessions.put(playerUuid, new ViewSession(GuiHolder.GuiType.PERSONAL_SHOP, 0, sellerUuid));
     }
 
     /**
@@ -54,6 +60,21 @@ public class ViewSessionRegistry {
         for (Map.Entry<UUID, ViewSession> entry : sessions.entrySet()) {
             ViewSession session = entry.getValue();
             if (session.guiType == GuiHolder.GuiType.AUCTION_DETAIL && session.relatedId == auctionId) {
+                result.add(entry.getKey());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 查找正在查看指定卖家个人商店的玩家。sellerUuid 为 null 时返回所有个人商店查看者。
+     */
+    public java.util.List<UUID> getPersonalShopViewers(UUID sellerUuid) {
+        java.util.List<UUID> result = new java.util.ArrayList<>();
+        for (Map.Entry<UUID, ViewSession> entry : sessions.entrySet()) {
+            ViewSession session = entry.getValue();
+            if (session.guiType != GuiHolder.GuiType.PERSONAL_SHOP) continue;
+            if (sellerUuid == null || sellerUuid.equals(session.sellerUuid)) {
                 result.add(entry.getKey());
             }
         }

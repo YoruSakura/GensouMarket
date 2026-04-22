@@ -32,6 +32,12 @@ permissions:
   gensoumarket.trade:
     description: 使用面对面交易功能
     default: true
+  gensoumarket.personal:
+    description: 使用个人商店视图
+    default: true
+  gensoumarket.personal.sign.create:
+    description: 创建个人商店牌子
+    default: true
   gensoumarket.admin:
     description: 幻想集市管理员权限
     default: op
