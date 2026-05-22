@@ -10,7 +10,7 @@ import java.util.Map;
 public class GuiHolder implements InventoryHolder {
 
     public enum GuiType {
-        MAIN_MENU, MARKET_BROWSE, SHOP, RECYCLE, AUCTION_LIST, AUCTION_DETAIL, TRADE
+        MAIN_MENU, MARKET_BROWSE, PERSONAL_SHOP, SHOP, RECYCLE, AUCTION_LIST, AUCTION_DETAIL, TRADE
     }
 
     private final GuiType type;

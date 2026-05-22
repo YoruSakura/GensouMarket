@@ -50,6 +50,8 @@ public class RecycleManager {
                 configItem.setTotalRecycled(dbItem.getTotalRecycled());
                 configItem.setRecycleMultiplier(dbItem.getRecycleMultiplier());
                 configItem.setLastUpdate(dbItem.getLastUpdate());
+                // 回流库存必须恢复，否则 recycled 商品在重启/reload 后会误显示为缺货
+                configItem.setRecycledStock(dbItem.getRecycledStock());
             }
 
             recycleItems.put(id, configItem);
@@ -105,6 +107,9 @@ public class RecycleManager {
         removeMaterial(player, material, amount);
 
         priceEngine.onPlayerRecycle(recycleItem, amount);
+        // 回流库存池累加（task-05），供 shop 端 recycled 模式消费
+        recycleItem.addRecycledStock(amount);
+        recycleItem.setLastUpdate(System.currentTimeMillis());
 
         // 异步写DB
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveRecycleData(recycleItem));

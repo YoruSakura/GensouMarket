@@ -10,6 +10,8 @@ public class RecycleItem {
     private int totalRecycled;
     private double recycleMultiplier;
     private long lastUpdate;
+    // 回流库存（task-05）：回收成功后 +=，购买 recycled 模式商品后 -=
+    private int recycledStock;
     // 运行时状态（不持久化），用于涨跌百分比计算
     private transient double snapshotPrice;
     private transient long snapshotTime;
@@ -20,6 +22,7 @@ public class RecycleItem {
         this.baseRecyclePrice = baseRecyclePrice;
         this.totalRecycled = 0;
         this.recycleMultiplier = 1.0;
+        this.recycledStock = 0;
         this.lastUpdate = System.currentTimeMillis();
     }
 
@@ -48,6 +51,11 @@ public class RecycleItem {
     public void setLastUpdate(long lastUpdate) { this.lastUpdate = lastUpdate; }
 
     public void addRecycled(int amount) { this.totalRecycled += amount; }
+
+    public int getRecycledStock() { return recycledStock; }
+    public void setRecycledStock(int recycledStock) { this.recycledStock = recycledStock; }
+
+    public void addRecycledStock(int amount) { this.recycledStock += amount; }
 
     public double getSnapshotPrice() { return snapshotPrice; }
     public void setSnapshotPrice(double snapshotPrice) { this.snapshotPrice = snapshotPrice; }

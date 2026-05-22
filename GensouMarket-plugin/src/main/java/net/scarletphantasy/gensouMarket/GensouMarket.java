@@ -8,9 +8,12 @@ import net.scarletphantasy.gensouMarket.command.CommandManager;
 import net.scarletphantasy.gensouMarket.config.ConfigManager;
 import net.scarletphantasy.gensouMarket.economy.VaultHook;
 import net.scarletphantasy.gensouMarket.gui.GuiListener;
+import net.scarletphantasy.gensouMarket.listener.PersonalShopSignListener;
 import net.scarletphantasy.gensouMarket.listener.PlayerListener;
+import net.scarletphantasy.gensouMarket.mail.MailNotificationService;
 import net.scarletphantasy.gensouMarket.market.AuctionManager;
 import net.scarletphantasy.gensouMarket.market.MarketManager;
+import net.scarletphantasy.gensouMarket.shop.PersonalShopSignManager;
 import net.scarletphantasy.gensouMarket.shop.RecycleManager;
 import net.scarletphantasy.gensouMarket.shop.ShopManager;
 import net.scarletphantasy.gensouMarket.listener.TradeInteractListener;
@@ -30,6 +33,8 @@ public final class GensouMarket extends JavaPlugin {
     private ShopManager shopManager;
     private RecycleManager recycleManager;
     private TradeManager tradeManager;
+    private PersonalShopSignManager personalShopSignManager;
+    private MailNotificationService mailNotificationService;
 
     // 跨服 Bridge（cluster.enabled=true 时才初始化）
     private ProxyBridge proxyBridge;
@@ -83,6 +88,10 @@ public final class GensouMarket extends JavaPlugin {
 
         tradeManager = new TradeManager(this);
 
+        // 个人商店牌子管理（task-02）
+        personalShopSignManager = new PersonalShopSignManager(this);
+        personalShopSignManager.load();
+
         // 初始化跨服 Bridge
         if (configManager.isClusterEnabled()) {
             viewSessionRegistry = new ViewSessionRegistry();
@@ -91,11 +100,13 @@ public final class GensouMarket extends JavaPlugin {
             RemoteActionHandler remoteHandler = new RemoteActionHandler(this, viewSessionRegistry);
             proxyBridge.setRemoteActionHandler(remoteHandler);
             proxyBridge.enable();
+            mailNotificationService = new MailNotificationService(this);
+            mailNotificationService.start();
             getLogger().info("跨服模式已启用 (serverId=" + configManager.getClusterServerId() + ")");
         }
 
-        // 恢复活跃拍卖的定时任务
-        auctionManager.restoreActiveAuctions();
+        // 按当前 auction.enabled 同步拍卖定时器状态（启用时恢复，禁用时不注册）
+        auctionManager.applyModuleState();
 
         // 注册命令
         CommandManager cmdManager = new CommandManager(this);
@@ -109,17 +120,28 @@ public final class GensouMarket extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new GuiListener(this), this);
         getServer().getPluginManager().registerEvents(new PlayerListener(this), this);
         getServer().getPluginManager().registerEvents(new TradeInteractListener(this), this);
+        getServer().getPluginManager().registerEvents(
+                new PersonalShopSignListener(this, personalShopSignManager), this);
 
         // 定时任务：检查过期上架和结束拍卖 (每分钟，异步执行)
+        // 各模块按开关控制，被关闭的模块不在本服扫描，由其他开启的子服兜底
         getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
-            marketManager.checkExpiredListingsAsync();
-            auctionManager.checkEndedAuctionsAsync();
+            if (configManager.isMarketEnabled()) {
+                marketManager.checkExpiredListingsAsync();
+            }
+            if (configManager.isAuctionEnabled()) {
+                auctionManager.checkEndedAuctionsAsync();
+            }
         }, 1200L, 1200L);
 
         // 定时任务：保存商店和回收数据 (每5分钟，异步执行)
         getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
-            shopManager.saveAllData();
-            recycleManager.saveAllData();
+            if (configManager.isShopEnabled()) {
+                shopManager.saveAllData();
+            }
+            if (configManager.isRecycleEnabled()) {
+                recycleManager.saveAllData();
+            }
         }, 6000L, 6000L);
 
         getLogger().info("幻想集市已启用！");
@@ -127,6 +149,7 @@ public final class GensouMarket extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (mailNotificationService != null) mailNotificationService.stop();
         if (proxyBridge != null) proxyBridge.disable();
         if (tradeManager != null) tradeManager.cancelAllActiveTrades();
         if (shopManager != null) shopManager.saveAllData();
@@ -147,5 +170,7 @@ public final class GensouMarket extends JavaPlugin {
     public ProxyBridge getProxyBridge() { return proxyBridge; }
     public ClusterEventPublisher getClusterEventPublisher() { return clusterEventPublisher; }
     public ViewSessionRegistry getViewSessionRegistry() { return viewSessionRegistry; }
+    public PersonalShopSignManager getPersonalShopSignManager() { return personalShopSignManager; }
+    public MailNotificationService getMailNotificationService() { return mailNotificationService; }
     public boolean isClusterEnabled() { return proxyBridge != null; }
 }

@@ -70,16 +70,24 @@ public class ConfigManager {
     public String getMysqlPassword() { return config.getString("storage.mysql.password", "password"); }
 
     // ---- Market ----
+    public boolean isMarketEnabled() { return config.getBoolean("market.enabled", true); }
     public double getListingTax() { return config.getDouble("market.listing-tax", 0.05); }
     public double getTransactionTax() { return config.getDouble("market.transaction-tax", 0.10); }
     public int getMaxListings() { return config.getInt("market.max-listings", 20); }
     public int getExpireHours() { return config.getInt("market.expire-hours", 168); }
 
     // ---- Auction ----
+    public boolean isAuctionEnabled() { return config.getBoolean("auction.enabled", true); }
     public int getDefaultAuctionDuration() { return config.getInt("auction.default-duration", 60); }
     public int getMinAuctionDuration() { return config.getInt("auction.min-duration", 10); }
     public int getMaxAuctionDuration() { return config.getInt("auction.max-duration", 1440); }
     public double getAuctionListingFeeRate() { return config.getDouble("auction.listing-fee-rate", 0.05); }
+
+    // ---- Mail ----
+    public boolean isMailEnabled() { return config.getBoolean("mail.enabled", true); }
+
+    // ---- Personal Shop ----
+    public boolean isPersonalShopEnabled() { return config.getBoolean("personal-shop.enabled", true); }
 
     // ---- Shop ----
     public boolean isShopEnabled() { return config.getBoolean("shop.enabled", true); }
@@ -179,9 +187,51 @@ public class ConfigManager {
             }
 
             double buyPrice = itemSec.getDouble("buy-price", 0);
-            items.put(key, new ShopItem(key, material, buyPrice));
+            ShopItem item = new ShopItem(key, material, buyPrice);
+
+            // 模式解析（旧数据无 mode 字段则按 fixed + unlimited 兼容）
+            String modeStr = itemSec.getString("mode", "fixed");
+            if ("recycled".equalsIgnoreCase(modeStr)) {
+                item.setMode(ShopItem.Mode.RECYCLED);
+                String source = itemSec.getString("recycle-source");
+                if (source == null || source.isEmpty()) {
+                    plugin.getLogger().warning("商店配置: recycled 模式物品缺少 recycle-source (ID: " + key + ")，已跳过");
+                    continue;
+                }
+                item.setRecycleSourceId(source);
+                double mult = itemSec.getDouble("sell-multiplier", 1.0);
+                if (mult <= 0) {
+                    plugin.getLogger().warning("商店配置: recycled 模式物品 sell-multiplier 非法 (ID: " + key + ")，已按 1.0 处理");
+                    mult = 1.0;
+                }
+                item.setSellMultiplier(mult);
+                // recycled 模式 stockMode 忽略，内部按有限库存处理
+                item.setStockMode(ShopItem.StockMode.LIMITED);
+            } else {
+                item.setMode(ShopItem.Mode.FIXED);
+                String stockModeStr = itemSec.getString("stock-mode", "unlimited");
+                if ("limited".equalsIgnoreCase(stockModeStr)) {
+                    item.setStockMode(ShopItem.StockMode.LIMITED);
+                    // availableStock 用 -1 哨兵表示"待与 DB 合并"，ShopManager 合并时若 DB 无记录才使用 initial-stock
+                    item.setAvailableStock(-1);
+                } else {
+                    item.setStockMode(ShopItem.StockMode.UNLIMITED);
+                }
+            }
+
+            items.put(key, item);
         }
         return items;
+    }
+
+    /**
+     * 读取商店配置中 fixed+limited 模式的 initial-stock（供 ShopManager 合并时初始化持久化库存使用）。
+     */
+    public int getShopInitialStock(String id, int fallback) {
+        ConfigurationSection section = shopConfig.getConfigurationSection("items." + id);
+        if (section == null) return fallback;
+        int v = section.getInt("initial-stock", fallback);
+        return Math.max(v, 0);
     }
 
     // ---- Recycle Items ----
@@ -210,9 +260,25 @@ public class ConfigManager {
 
     // ---- Shop Config Persistence ----
     public void saveShopItem(String id, Material material, double buyPrice) {
+        // 管理员 /gmarket shop add 仅创建 fixed+unlimited 商品（task-05）
         shopConfig.set("items." + id + ".material", material.name());
+        shopConfig.set("items." + id + ".mode", "fixed");
         shopConfig.set("items." + id + ".buy-price", buyPrice);
+        shopConfig.set("items." + id + ".stock-mode", "unlimited");
         saveShopConfig();
+    }
+
+    /**
+     * 只修改指定商品的 buy-price，不触碰 mode / stock-mode / initial-stock / recycle-source / sell-multiplier。
+     * 供 /gmarket shop setprice 使用，避免把 fixed+limited 商品意外降级为 fixed+unlimited。
+     * @return true 表示写入成功（配置中存在该商品）
+     */
+    public boolean updateShopBuyPrice(String id, double buyPrice) {
+        String path = "items." + id;
+        if (!shopConfig.contains(path)) return false;
+        shopConfig.set(path + ".buy-price", buyPrice);
+        saveShopConfig();
+        return true;
     }
 
     public void removeShopItem(String id) {

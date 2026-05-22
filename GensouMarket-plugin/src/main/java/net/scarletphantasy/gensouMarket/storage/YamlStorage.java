@@ -335,24 +335,29 @@ public class YamlStorage implements StorageProvider {
 
     @Override
     public void saveShopData(ShopItem item) {
-        String path = "items." + item.getId();
-        shopDataConfig.set(path + ".material", item.getMaterial().name());
-        shopDataConfig.set(path + ".base-buy-price", item.getBaseBuyPrice());
-        shopDataConfig.set(path + ".total-bought", item.getTotalBought());
-        shopDataConfig.set(path + ".last-update", item.getLastUpdate());
+        writeShopItem(item);
         saveFile(shopDataConfig, shopFile);
     }
 
     @Override
     public void saveAllShopData(Map<String, ShopItem> items) {
         for (ShopItem item : items.values()) {
-            String path = "items." + item.getId();
-            shopDataConfig.set(path + ".material", item.getMaterial().name());
-            shopDataConfig.set(path + ".base-buy-price", item.getBaseBuyPrice());
-            shopDataConfig.set(path + ".total-bought", item.getTotalBought());
-            shopDataConfig.set(path + ".last-update", item.getLastUpdate());
+            writeShopItem(item);
         }
         saveFile(shopDataConfig, shopFile);
+    }
+
+    private void writeShopItem(ShopItem item) {
+        String path = "items." + item.getId();
+        shopDataConfig.set(path + ".material", item.getMaterial().name());
+        shopDataConfig.set(path + ".base-buy-price", item.getBaseBuyPrice());
+        shopDataConfig.set(path + ".total-bought", item.getTotalBought());
+        shopDataConfig.set(path + ".last-update", item.getLastUpdate());
+        shopDataConfig.set(path + ".mode", item.getMode().name());
+        shopDataConfig.set(path + ".stock-mode", item.getStockMode().name());
+        shopDataConfig.set(path + ".available-stock", item.getAvailableStock());
+        shopDataConfig.set(path + ".recycle-source-id", item.getRecycleSourceId());
+        shopDataConfig.set(path + ".sell-multiplier", item.getSellMultiplier());
     }
 
     @Override
@@ -370,6 +375,13 @@ public class YamlStorage implements StorageProvider {
             ShopItem item = new ShopItem(key, mat, sec.getDouble("base-buy-price"));
             item.setTotalBought(sec.getInt("total-bought"));
             item.setLastUpdate(sec.getLong("last-update"));
+            String modeStr = sec.getString("mode", "FIXED");
+            try { item.setMode(ShopItem.Mode.valueOf(modeStr)); } catch (IllegalArgumentException ignored) {}
+            String stockModeStr = sec.getString("stock-mode", "UNLIMITED");
+            try { item.setStockMode(ShopItem.StockMode.valueOf(stockModeStr)); } catch (IllegalArgumentException ignored) {}
+            item.setAvailableStock(sec.getInt("available-stock", -1));
+            item.setRecycleSourceId(sec.getString("recycle-source-id"));
+            item.setSellMultiplier(sec.getDouble("sell-multiplier", 1.0));
             map.put(key, item);
         }
         return map;
@@ -379,26 +391,26 @@ public class YamlStorage implements StorageProvider {
 
     @Override
     public void saveRecycleData(RecycleItem item) {
-        String path = "items." + item.getId();
-        recycleDataConfig.set(path + ".material", item.getMaterial().name());
-        recycleDataConfig.set(path + ".base-recycle-price", item.getBaseRecyclePrice());
-        recycleDataConfig.set(path + ".total-recycled", item.getTotalRecycled());
-        recycleDataConfig.set(path + ".recycle-multiplier", item.getRecycleMultiplier());
-        recycleDataConfig.set(path + ".last-update", item.getLastUpdate());
+        writeRecycleItem(item);
         saveFile(recycleDataConfig, recycleFile);
     }
 
     @Override
     public void saveAllRecycleData(Map<String, RecycleItem> items) {
         for (RecycleItem item : items.values()) {
-            String path = "items." + item.getId();
-            recycleDataConfig.set(path + ".material", item.getMaterial().name());
-            recycleDataConfig.set(path + ".base-recycle-price", item.getBaseRecyclePrice());
-            recycleDataConfig.set(path + ".total-recycled", item.getTotalRecycled());
-            recycleDataConfig.set(path + ".recycle-multiplier", item.getRecycleMultiplier());
-            recycleDataConfig.set(path + ".last-update", item.getLastUpdate());
+            writeRecycleItem(item);
         }
         saveFile(recycleDataConfig, recycleFile);
+    }
+
+    private void writeRecycleItem(RecycleItem item) {
+        String path = "items." + item.getId();
+        recycleDataConfig.set(path + ".material", item.getMaterial().name());
+        recycleDataConfig.set(path + ".base-recycle-price", item.getBaseRecyclePrice());
+        recycleDataConfig.set(path + ".total-recycled", item.getTotalRecycled());
+        recycleDataConfig.set(path + ".recycle-multiplier", item.getRecycleMultiplier());
+        recycleDataConfig.set(path + ".last-update", item.getLastUpdate());
+        recycleDataConfig.set(path + ".recycled-stock", item.getRecycledStock());
     }
 
     @Override
@@ -417,6 +429,7 @@ public class YamlStorage implements StorageProvider {
             item.setTotalRecycled(sec.getInt("total-recycled"));
             item.setRecycleMultiplier(sec.getDouble("recycle-multiplier", 1.0));
             item.setLastUpdate(sec.getLong("last-update"));
+            item.setRecycledStock(sec.getInt("recycled-stock", 0));
             map.put(key, item);
         }
         return map;

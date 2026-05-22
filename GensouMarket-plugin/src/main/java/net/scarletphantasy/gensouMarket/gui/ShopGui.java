@@ -1,7 +1,9 @@
 package net.scarletphantasy.gensouMarket.gui;
 
 import net.scarletphantasy.gensouMarket.GensouMarket;
+import net.scarletphantasy.gensouMarket.model.RecycleItem;
 import net.scarletphantasy.gensouMarket.model.ShopItem;
+import net.scarletphantasy.gensouMarket.shop.ShopManager;
 import net.scarletphantasy.gensouMarket.util.ItemNameUtil;
 import net.scarletphantasy.gensouMarket.util.MessageUtil;
 import net.kyori.adventure.text.Component;
@@ -42,18 +44,27 @@ public final class ShopGui {
         int start = page * PAGE_SIZE;
         int end = Math.min(start + PAGE_SIZE, itemList.size());
 
+        ShopManager shopManager = plugin.getShopManager();
         for (int i = start; i < end; i++) {
             ShopItem shopItem = itemList.get(i);
+            double price = shopManager.computeCurrentPrice(shopItem);
+            int stock = shopManager.computeAvailableStock(shopItem);
+            boolean outOfStock = stock <= 0;
+
             ItemStack display = new ItemStack(shopItem.getMaterial());
             ItemMeta meta = display.getItemMeta();
             if (meta != null) {
                 meta.displayName(ItemNameUtil.getLocalizedName(shopItem.getMaterial()));
                 List<Component> lore = new ArrayList<>();
                 lore.add(Component.empty());
-                lore.add(LEGACY.deserialize("&a购买价格: &e" + MessageUtil.formatMoney(shopItem.getCurrentBuyPrice()) + " &7(固定)"));
+                lore.addAll(buildModeLore(shopItem, shopManager, price, stock, outOfStock));
                 lore.add(Component.empty());
-                lore.add(LEGACY.deserialize("&a左键购买1个"));
-                lore.add(LEGACY.deserialize("&aShift+左键购买64个"));
+                if (outOfStock) {
+                    lore.add(LEGACY.deserialize("&c&l缺货中"));
+                } else {
+                    lore.add(LEGACY.deserialize("&a左键购买1个"));
+                    lore.add(LEGACY.deserialize("&aShift+左键购买64个"));
+                }
                 meta.lore(lore);
                 display.setItemMeta(meta);
             }
@@ -72,5 +83,34 @@ public final class ShopGui {
         }
 
         player.openInventory(inv);
+    }
+
+    private static List<Component> buildModeLore(ShopItem shopItem, ShopManager shopManager,
+                                                 double price, int stock, boolean outOfStock) {
+        List<Component> lore = new ArrayList<>();
+        String priceStr = MessageUtil.formatMoney(price);
+        if (shopItem.isFixedUnlimited()) {
+            lore.add(LEGACY.deserialize("&a购买价格: &e" + priceStr + " &7(固定)"));
+            lore.add(LEGACY.deserialize("&7库存: &f无限"));
+        } else if (shopItem.isFixedLimited()) {
+            lore.add(LEGACY.deserialize("&a购买价格: &e" + priceStr + " &7(固定)"));
+            if (outOfStock) {
+                lore.add(LEGACY.deserialize("&7库存: &c0 (缺货)"));
+            } else {
+                lore.add(LEGACY.deserialize("&7库存: &f" + stock));
+            }
+        } else if (shopItem.isRecycled()) {
+            lore.add(LEGACY.deserialize("&a当前售价: &e" + priceStr + " &7(动态)"));
+            RecycleItem source = shopManager.resolveRecycleSource(shopItem);
+            String sourceName = source != null ? source.getId() : "?";
+            lore.add(LEGACY.deserialize("&7回流来源: &f" + sourceName));
+            lore.add(LEGACY.deserialize("&7倍率: &f" + shopItem.getSellMultiplier()));
+            if (outOfStock) {
+                lore.add(LEGACY.deserialize("&7回流库存: &c0 (缺货)"));
+            } else {
+                lore.add(LEGACY.deserialize("&7回流库存: &f" + stock));
+            }
+        }
+        return lore;
     }
 }
