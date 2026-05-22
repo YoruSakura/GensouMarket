@@ -10,6 +10,7 @@ import net.scarletphantasy.gensouMarket.economy.VaultHook;
 import net.scarletphantasy.gensouMarket.gui.GuiListener;
 import net.scarletphantasy.gensouMarket.listener.PersonalShopSignListener;
 import net.scarletphantasy.gensouMarket.listener.PlayerListener;
+import net.scarletphantasy.gensouMarket.mail.MailNotificationService;
 import net.scarletphantasy.gensouMarket.market.AuctionManager;
 import net.scarletphantasy.gensouMarket.market.MarketManager;
 import net.scarletphantasy.gensouMarket.shop.PersonalShopSignManager;
@@ -33,6 +34,7 @@ public final class GensouMarket extends JavaPlugin {
     private RecycleManager recycleManager;
     private TradeManager tradeManager;
     private PersonalShopSignManager personalShopSignManager;
+    private MailNotificationService mailNotificationService;
 
     // 跨服 Bridge（cluster.enabled=true 时才初始化）
     private ProxyBridge proxyBridge;
@@ -98,6 +100,8 @@ public final class GensouMarket extends JavaPlugin {
             RemoteActionHandler remoteHandler = new RemoteActionHandler(this, viewSessionRegistry);
             proxyBridge.setRemoteActionHandler(remoteHandler);
             proxyBridge.enable();
+            mailNotificationService = new MailNotificationService(this);
+            mailNotificationService.start();
             getLogger().info("跨服模式已启用 (serverId=" + configManager.getClusterServerId() + ")");
         }
 
@@ -145,6 +149,7 @@ public final class GensouMarket extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (mailNotificationService != null) mailNotificationService.stop();
         if (proxyBridge != null) proxyBridge.disable();
         if (tradeManager != null) tradeManager.cancelAllActiveTrades();
         if (shopManager != null) shopManager.saveAllData();
@@ -166,5 +171,6 @@ public final class GensouMarket extends JavaPlugin {
     public ClusterEventPublisher getClusterEventPublisher() { return clusterEventPublisher; }
     public ViewSessionRegistry getViewSessionRegistry() { return viewSessionRegistry; }
     public PersonalShopSignManager getPersonalShopSignManager() { return personalShopSignManager; }
+    public MailNotificationService getMailNotificationService() { return mailNotificationService; }
     public boolean isClusterEnabled() { return proxyBridge != null; }
 }

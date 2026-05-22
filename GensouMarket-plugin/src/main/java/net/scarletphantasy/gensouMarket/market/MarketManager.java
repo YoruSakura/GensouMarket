@@ -339,8 +339,6 @@ public class MarketManager {
             storage.saveMail(mail);
             // 跨服通知邮箱
             publishIfCluster(p -> p.publishMailCreated(mail.getPlayerUuid(), false, true, mail.getMessage()));
-            publishIfCluster(p -> p.requestPlayerNotify(mail.getPlayerUuid(),
-                    "&e你有上架物品已过期，使用 &a/gmarket collect &e领取退回物品"));
         }
 
         // 跨服广播过期
@@ -405,9 +403,6 @@ public class MarketManager {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             storage.saveMail(mail);
             publishIfCluster(p -> p.publishMailCreated(mail.getPlayerUuid(), hasMoney, hasItem, mail.getMessage()));
-            if (notifyMessage != null && !notifyMessage.isEmpty()) {
-                publishIfCluster(p -> p.requestPlayerNotify(mail.getPlayerUuid(), notifyMessage));
-            }
         });
     }
 }

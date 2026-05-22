@@ -578,6 +578,8 @@ public class AuctionManager {
                 bidderMail.setMoney(auction.getCurrentPrice());
                 bidderMail.setMessage("拍卖 #" + auction.getId() + " 因服务器重启已取消，竞拍金额已退还");
                 storage.saveMail(bidderMail);
+                publishIfCluster(p -> p.publishMailCreated(auction.getHighestBidderUuid(),
+                        true, false, bidderMail.getMessage()));
             }
 
             MailEntry sellerMail = new MailEntry();
@@ -586,6 +588,8 @@ public class AuctionManager {
             sellerMail.setItemStack(auction.getItemStack());
             sellerMail.setMessage("拍卖 #" + auction.getId() + " 因服务器重启已取消，物品已退还");
             storage.saveMail(sellerMail);
+            publishIfCluster(p -> p.publishMailCreated(auction.getSellerUuid(),
+                    false, true, sellerMail.getMessage()));
         }
 
         if (cancelled > 0) {
@@ -658,9 +662,6 @@ public class AuctionManager {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             storage.saveMail(mail);
             publishIfCluster(p -> p.publishMailCreated(mail.getPlayerUuid(), hasMoney, hasItem, mail.getMessage()));
-            if (notifyMessage != null && !notifyMessage.isEmpty()) {
-                publishIfCluster(p -> p.requestPlayerNotify(mail.getPlayerUuid(), notifyMessage));
-            }
         });
     }
 }

@@ -544,7 +544,12 @@ public class CommandManager implements TabExecutor {
                                 for (int id : rollbackIds) {
                                     plugin.getStorage().unclaimMail(id);
                                 }
+                                if (plugin.getMailNotificationService() != null) {
+                                    plugin.getMailNotificationService().rememberCurrentMailAsync(player.getUniqueId());
+                                }
                             });
+                        } else if (plugin.getMailNotificationService() != null) {
+                            plugin.getMailNotificationService().rememberCurrentMailAsync(player.getUniqueId());
                         }
 
                         if (totalMoney <= 0 && itemCount <= 0) {

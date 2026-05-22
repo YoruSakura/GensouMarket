@@ -134,12 +134,19 @@ public class RemoteActionHandler {
         UUID targetUuid = parseUuid(payload.get("targetPlayerUuid"));
         if (targetUuid == null) return;
 
+        if (plugin.getMailNotificationService() != null) {
+            plugin.getMailNotificationService().recordExternalNotice(targetUuid);
+        }
+
         Bukkit.getScheduler().runTask(plugin, () -> {
             Player player = Bukkit.getPlayer(targetUuid);
             if (player != null && player.isOnline()) {
                 MessageUtil.send(player, "&e你有新的待领取物品/金币！使用 &a/gmarket collect &e领取");
             }
         });
+        if (plugin.getMailNotificationService() != null) {
+            plugin.getMailNotificationService().rememberCurrentMailAsync(targetUuid);
+        }
     }
 
     // ========== 市场事件处理 ==========

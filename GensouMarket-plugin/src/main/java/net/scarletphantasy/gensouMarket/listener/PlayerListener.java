@@ -35,6 +35,9 @@ public class PlayerListener implements Listener {
 
         plugin.getServer().getScheduler().runTaskLaterAsynchronously(plugin, () -> {
             List<MailEntry> mail = plugin.getStorage().getPlayerMail(player.getUniqueId());
+            if (plugin.getMailNotificationService() != null) {
+                plugin.getMailNotificationService().remember(player.getUniqueId(), mail);
+            }
             if (mail.isEmpty()) return;
 
             Bukkit.getScheduler().runTask(plugin, () -> {
@@ -48,6 +51,9 @@ public class PlayerListener implements Listener {
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
+        if (plugin.getMailNotificationService() != null) {
+            plugin.getMailNotificationService().forget(player.getUniqueId());
+        }
         if (plugin.getTradeManager() != null) {
             plugin.getTradeManager().handlePlayerQuit(player.getUniqueId());
         }
