@@ -24,6 +24,9 @@ claude-start*.sh
 # Local release / development docs
 1.1版本开发想法.md
 Claude.md
+claude.md
+.claude/
+doc/
 MC插件开发踩坑总结.md
 Velocity插件架构规划.md
 正式版终验清单.md
