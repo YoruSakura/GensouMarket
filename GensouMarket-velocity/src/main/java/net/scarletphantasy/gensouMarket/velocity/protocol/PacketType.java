@@ -30,7 +30,10 @@ public enum PacketType {
 
     // 请求应答
     REQUEST_ACK((byte) 0x60),
-    REQUEST_FAIL((byte) 0x61);
+    REQUEST_FAIL((byte) 0x61),
+
+    // v1.1.1 价格压力同步
+    PRESSURE_SYNC((byte) 0x70);
 
     private final byte id;
 

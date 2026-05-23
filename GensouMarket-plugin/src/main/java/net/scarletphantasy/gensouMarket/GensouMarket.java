@@ -6,6 +6,7 @@ import net.scarletphantasy.gensouMarket.bridge.RemoteActionHandler;
 import net.scarletphantasy.gensouMarket.bridge.ViewSessionRegistry;
 import net.scarletphantasy.gensouMarket.command.CommandManager;
 import net.scarletphantasy.gensouMarket.config.ConfigManager;
+import net.scarletphantasy.gensouMarket.economy.EconomySnapshotService;
 import net.scarletphantasy.gensouMarket.economy.VaultHook;
 import net.scarletphantasy.gensouMarket.gui.GuiListener;
 import net.scarletphantasy.gensouMarket.listener.PersonalShopSignListener;
@@ -35,6 +36,7 @@ public final class GensouMarket extends JavaPlugin {
     private TradeManager tradeManager;
     private PersonalShopSignManager personalShopSignManager;
     private MailNotificationService mailNotificationService;
+    private EconomySnapshotService economySnapshotService;
 
     // 跨服 Bridge（cluster.enabled=true 时才初始化）
     private ProxyBridge proxyBridge;
@@ -87,6 +89,10 @@ public final class GensouMarket extends JavaPlugin {
         recycleManager.loadItems();
 
         tradeManager = new TradeManager(this);
+
+        // v1.1.1 全服经济快照服务
+        economySnapshotService = new EconomySnapshotService(this);
+        economySnapshotService.start();
 
         // 个人商店牌子管理（task-02）
         personalShopSignManager = new PersonalShopSignManager(this);
@@ -144,11 +150,27 @@ public final class GensouMarket extends JavaPlugin {
             }
         }, 6000L, 6000L);
 
+        // v1.1.1 定时任务：集群模式下定期从 MySQL 校准压力数据 (每3分钟，异步执行)
+        if (isClusterEnabled()) {
+            getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
+                if (configManager.isRecycleEnabled()) {
+                    java.util.Map<String, net.scarletphantasy.gensouMarket.config.RecyclePricingConfig> configMap = new java.util.HashMap<>();
+                    net.scarletphantasy.gensouMarket.config.PricingConfigResolver resolver = new net.scarletphantasy.gensouMarket.config.PricingConfigResolver(configManager, getLogger());
+                    for (String id : recycleManager.getRecycleItems().keySet()) {
+                        configMap.put(id, resolver.resolveForRecycleItem(id));
+                    }
+                    recycleManager.getPressureWindow().loadAll(configMap);
+                    getLogger().fine("[Cluster] 压力数据定期校准完成");
+                }
+            }, 3600L, 3600L);
+        }
+
         getLogger().info("幻想集市已启用！");
     }
 
     @Override
     public void onDisable() {
+        if (economySnapshotService != null) economySnapshotService.stop();
         if (mailNotificationService != null) mailNotificationService.stop();
         if (proxyBridge != null) proxyBridge.disable();
         if (tradeManager != null) tradeManager.cancelAllActiveTrades();
@@ -172,5 +194,6 @@ public final class GensouMarket extends JavaPlugin {
     public ViewSessionRegistry getViewSessionRegistry() { return viewSessionRegistry; }
     public PersonalShopSignManager getPersonalShopSignManager() { return personalShopSignManager; }
     public MailNotificationService getMailNotificationService() { return mailNotificationService; }
+    public EconomySnapshotService getEconomySnapshotService() { return economySnapshotService; }
     public boolean isClusterEnabled() { return proxyBridge != null; }
 }

@@ -2,6 +2,9 @@ package net.scarletphantasy.gensouMarket.shop;
 
 import net.scarletphantasy.gensouMarket.GensouMarket;
 import net.scarletphantasy.gensouMarket.config.ConfigManager;
+import net.scarletphantasy.gensouMarket.config.PricingConfigResolver;
+import net.scarletphantasy.gensouMarket.config.RecyclePricingConfig;
+import net.scarletphantasy.gensouMarket.economy.EconomySnapshotService;
 import net.scarletphantasy.gensouMarket.economy.VaultHook;
 import net.scarletphantasy.gensouMarket.model.RecycleItem;
 import net.scarletphantasy.gensouMarket.storage.StorageProvider;
@@ -23,8 +26,11 @@ public class RecycleManager {
     private final StorageProvider storage;
     private final ConfigManager config;
     private final VaultHook vault;
+    /** v1.1.1 新价格引擎 */
     private final PriceEngine priceEngine;
-    private final MarketFluctuation marketFluctuation;
+    private final PricingConfigResolver configResolver;
+    /** v1.1.1 压力窗口管理器 */
+    private final PressureWindowManager pressureWindow;
     private final Map<String, RecycleItem> recycleItems = new LinkedHashMap<>();
 
     public RecycleManager(GensouMarket plugin) {
@@ -32,8 +38,9 @@ public class RecycleManager {
         this.storage = plugin.getStorage();
         this.config = plugin.getConfigManager();
         this.vault = plugin.getVaultHook();
-        this.priceEngine = new PriceEngine(config);
-        this.marketFluctuation = new MarketFluctuation(config);
+        this.configResolver = new PricingConfigResolver(config, plugin.getLogger());
+        this.priceEngine = new PriceEngine(configResolver);
+        this.pressureWindow = new PressureWindowManager(plugin, storage, plugin.getLogger());
     }
 
     public void loadItems() {
@@ -48,7 +55,6 @@ public class RecycleManager {
             if (dbData.containsKey(id)) {
                 RecycleItem dbItem = dbData.get(id);
                 configItem.setTotalRecycled(dbItem.getTotalRecycled());
-                configItem.setRecycleMultiplier(dbItem.getRecycleMultiplier());
                 configItem.setLastUpdate(dbItem.getLastUpdate());
                 // 回流库存必须恢复，否则 recycled 商品在重启/reload 后会误显示为缺货
                 configItem.setRecycledStock(dbItem.getRecycledStock());
@@ -56,6 +62,13 @@ public class RecycleManager {
 
             recycleItems.put(id, configItem);
         }
+
+        // v1.1.1 冷启动：加载压力桶并清理过期
+        Map<String, RecyclePricingConfig> configMap = new java.util.HashMap<>();
+        for (String id : recycleItems.keySet()) {
+            configMap.put(id, configResolver.resolveForRecycleItem(id));
+        }
+        pressureWindow.loadAll(configMap);
     }
 
     public void saveAllData() {
@@ -73,6 +86,23 @@ public class RecycleManager {
         return null;
     }
 
+    /**
+     * 执行回收操作（v1.1.1 重写）。
+     * <p>
+     * 流程：
+     * <ol>
+     *   <li>校验回收模块启用</li>
+     *   <li>校验物品和数量</li>
+     *   <li>读取压力状态并清理过期 bucket</li>
+     *   <li>用 PriceEngine 计算本次 totalEarning</li>
+     *   <li>Vault 入账</li>
+     *   <li>移除玩家物品</li>
+     *   <li>写入压力窗口</li>
+     *   <li>增加 totalRecycled 和 recycledStock</li>
+     *   <li>异步保存回收数据和压力数据</li>
+     * </ol>
+     * 如果入账或物品移除失败，不写入压力。
+     */
     public boolean recycleItem(Player player, RecycleItem recycleItem, int amount) {
         if (!config.isRecycleEnabled()) {
             MessageUtil.send(player, "&c回收站未启用！");
@@ -95,32 +125,66 @@ public class RecycleManager {
             amount = available;
         }
 
-        double fluctuation = marketFluctuation.calculate(recycleItem.getId(), System.currentTimeMillis());
-        double pricePerUnit = recycleItem.getCurrentRecyclePrice(fluctuation);
-        double totalEarning = pricePerUnit * amount;
+        // ---- v1.1.1 压力窗口 + PriceEngine 结算 ----
+        long now = System.currentTimeMillis();
+        RecyclePricingConfig pricingConfig = configResolver.resolveForRecycleItem(recycleItem.getId());
 
+        // 3. 读取当前 activeVolume（清理过期桶后的窗口内回收量）
+        int activeVolume = pressureWindow.getActiveVolume(recycleItem.getId(), pricingConfig, now);
+
+        // 获取经济倍率（模块 15）
+        EconomySnapshotService economy = plugin.getEconomySnapshotService();
+        double econRecycleMultiplier = economy != null ? economy.getRecycleMultiplier() : 1.0;
+
+        // 4. 构造 PriceContext 并用 PriceEngine 计算批量总额
+        PriceContext ctx = new PriceContext(
+                now,
+                econRecycleMultiplier,
+                1.0,                    // shopMultiplier 回收用不到
+                activeVolume,
+                recycleItem.getRecycledStock(),
+                0, 0                    // 库存相关字段回收用不到
+        );
+        PriceResult result = priceEngine.calculateBatchRecyclePrice(recycleItem, pricingConfig, ctx, amount);
+        double totalEarning = result.totalPrice();
+
+        // 5. Vault 入账（失败则不写压力）
         if (!vault.deposit(player, totalEarning)) {
             MessageUtil.send(player, "&c入账失败，请稍后重试回收！");
             return false;
         }
 
+        // 6. 移除玩家物品
         removeMaterial(player, material, amount);
 
-        priceEngine.onPlayerRecycle(recycleItem, amount);
-        // 回流库存池累加（task-05），供 shop 端 recycled 模式消费
-        recycleItem.addRecycledStock(amount);
-        recycleItem.setLastUpdate(System.currentTimeMillis());
+        // 7. 写入压力窗口（入账和移除成功后才写入）
+        int newActiveVolume = pressureWindow.recordRecycle(recycleItem.getId(), pricingConfig, amount, now);
 
-        // 异步写DB
+        // 7.5. 跨服压力同步（Velocity）
+        if (plugin.isClusterEnabled()) {
+            long bucketMillis = pricingConfig.bucketSeconds() * 1000L;
+            if (bucketMillis <= 0) bucketMillis = 60_000L;
+            long bucketStart = (now / bucketMillis) * bucketMillis;
+            plugin.getClusterEventPublisher().publishPressureSync(
+                    recycleItem.getId(), bucketStart, amount, newActiveVolume, now);
+        }
+
+        // 8. 增加 totalRecycled 和 recycledStock
+        recycleItem.addRecycled(amount);
+        recycleItem.addRecycledStock(amount);
+        recycleItem.setLastUpdate(now);
+
+        // 9. 异步保存回收数据
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveRecycleData(recycleItem));
 
+        // 发送消息
         MessageUtil.send(player, Component.text("成功回收 ", NamedTextColor.GREEN)
                 .append(Component.text(amount + "x ", NamedTextColor.YELLOW))
                 .append(ItemNameUtil.getLocalizedName(recycleItem.getMaterial()).color(NamedTextColor.YELLOW))
                 .append(Component.text(" 获得: ", NamedTextColor.GREEN))
                 .append(Component.text(MessageUtil.formatMoney(totalEarning), NamedTextColor.YELLOW))
-                .append(Component.text(" (单价: ", NamedTextColor.GREEN))
-                .append(Component.text(MessageUtil.formatMoney(pricePerUnit), NamedTextColor.YELLOW))
+                .append(Component.text(" (均价: ", NamedTextColor.GREEN))
+                .append(Component.text(MessageUtil.formatMoney(result.averagePrice()), NamedTextColor.YELLOW))
                 .append(Component.text(")", NamedTextColor.GREEN)));
         return true;
     }
@@ -152,8 +216,18 @@ public class RecycleManager {
         }
     }
 
-    public MarketFluctuation getMarketFluctuation() {
-        return marketFluctuation;
+    /**
+     * 获取 v1.1.1 新价格引擎。
+     */
+    public PriceEngine getPriceEngine() {
+        return priceEngine;
+    }
+
+    /**
+     * 获取 v1.1.1 压力窗口管理器。
+     */
+    public PressureWindowManager getPressureWindow() {
+        return pressureWindow;
     }
 
     public boolean addItem(String id, Material material, double recyclePrice) {
@@ -181,3 +255,4 @@ public class RecycleManager {
         return true;
     }
 }
+

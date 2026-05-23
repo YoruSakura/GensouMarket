@@ -22,11 +22,13 @@ public class YamlStorage implements StorageProvider {
     private File shopFile;
     private File recycleFile;
     private File mailFile;
+    private File pressureFile;
     private YamlConfiguration listingsConfig;
     private YamlConfiguration auctionsConfig;
     private YamlConfiguration shopDataConfig;
     private YamlConfiguration recycleDataConfig;
     private YamlConfiguration mailConfig;
+    private YamlConfiguration pressureDataConfig;
     private final AtomicInteger listingIdCounter = new AtomicInteger(0);
     private final AtomicInteger auctionIdCounter = new AtomicInteger(0);
     private final AtomicInteger mailIdCounter = new AtomicInteger(0);
@@ -47,12 +49,14 @@ public class YamlStorage implements StorageProvider {
         shopFile = new File(storageDir, "shop_data.yml");
         recycleFile = new File(storageDir, "recycle_data.yml");
         mailFile = new File(storageDir, "mail.yml");
+        pressureFile = new File(storageDir, "pressure_data.yml");
 
         listingsConfig = YamlConfiguration.loadConfiguration(listingsFile);
         auctionsConfig = YamlConfiguration.loadConfiguration(auctionsFile);
         shopDataConfig = YamlConfiguration.loadConfiguration(shopFile);
         recycleDataConfig = YamlConfiguration.loadConfiguration(recycleFile);
         mailConfig = YamlConfiguration.loadConfiguration(mailFile);
+        pressureDataConfig = YamlConfiguration.loadConfiguration(pressureFile);
 
         migrateShopToRecycle();
 
@@ -73,6 +77,7 @@ public class YamlStorage implements StorageProvider {
             shopDataConfig.save(shopFile);
             recycleDataConfig.save(recycleFile);
             mailConfig.save(mailFile);
+            pressureDataConfig.save(pressureFile);
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "[YAML] 保存文件失败", e);
         }
@@ -408,7 +413,7 @@ public class YamlStorage implements StorageProvider {
         recycleDataConfig.set(path + ".material", item.getMaterial().name());
         recycleDataConfig.set(path + ".base-recycle-price", item.getBaseRecyclePrice());
         recycleDataConfig.set(path + ".total-recycled", item.getTotalRecycled());
-        recycleDataConfig.set(path + ".recycle-multiplier", item.getRecycleMultiplier());
+        recycleDataConfig.set(path + ".recycle-multiplier", 1.0); // 废弃
         recycleDataConfig.set(path + ".last-update", item.getLastUpdate());
         recycleDataConfig.set(path + ".recycled-stock", item.getRecycledStock());
     }
@@ -427,12 +432,101 @@ public class YamlStorage implements StorageProvider {
             if (mat == null) continue;
             RecycleItem item = new RecycleItem(key, mat, sec.getDouble("base-recycle-price"));
             item.setTotalRecycled(sec.getInt("total-recycled"));
-            item.setRecycleMultiplier(sec.getDouble("recycle-multiplier", 1.0));
+            // item.setRecycleMultiplier(sec.getDouble("recycle-multiplier", 1.0)); v1.1.1 废弃
             item.setLastUpdate(sec.getLong("last-update"));
             item.setRecycledStock(sec.getInt("recycled-stock", 0));
             map.put(key, item);
         }
         return map;
+    }
+
+    // ---- Pressure Data (v1.1.1) ----
+
+    @Override
+    public void savePressureBucket(PressureBucket bucket) {
+        String path = "items." + bucket.itemId() + ".buckets." + bucket.bucketStart();
+        pressureDataConfig.set(path, bucket.amount());
+        pressureDataConfig.set("items." + bucket.itemId() + ".updated-at", bucket.updatedAt());
+        saveFile(pressureDataConfig, pressureFile);
+    }
+
+    @Override
+    public void saveAllPressureBuckets(String itemId, List<PressureBucket> buckets) {
+        // 全量覆盖该物品的桶
+        pressureDataConfig.set("items." + itemId, null);
+        if (!buckets.isEmpty()) {
+            long updatedAt = System.currentTimeMillis();
+            for (PressureBucket b : buckets) {
+                String path = "items." + itemId + ".buckets." + b.bucketStart();
+                pressureDataConfig.set(path, b.amount());
+                updatedAt = b.updatedAt();
+            }
+            pressureDataConfig.set("items." + itemId + ".updated-at", updatedAt);
+        }
+        saveFile(pressureDataConfig, pressureFile);
+    }
+
+    @Override
+    public void addPressureAmount(String itemId, long bucketStart, int amountDelta, long now) {
+        String path = "items." + itemId + ".buckets." + bucketStart;
+        int current = pressureDataConfig.getInt(path, 0);
+        pressureDataConfig.set(path, current + amountDelta);
+        pressureDataConfig.set("items." + itemId + ".updated-at", now);
+        saveFile(pressureDataConfig, pressureFile);
+    }
+
+    @Override
+    public List<PressureBucket> loadPressureBuckets(String itemId) {
+        List<PressureBucket> list = new ArrayList<>();
+        ConfigurationSection bucketsSection = pressureDataConfig.getConfigurationSection("items." + itemId + ".buckets");
+        if (bucketsSection == null) return list;
+        long updatedAt = pressureDataConfig.getLong("items." + itemId + ".updated-at", System.currentTimeMillis());
+        for (String key : bucketsSection.getKeys(false)) {
+            try {
+                long bucketStart = Long.parseLong(key);
+                int amount = bucketsSection.getInt(key);
+                list.add(new PressureBucket(itemId, bucketStart, amount, updatedAt));
+            } catch (NumberFormatException ignored) {}
+        }
+        list.sort(Comparator.comparingLong(PressureBucket::bucketStart));
+        return list;
+    }
+
+    @Override
+    public Map<String, List<PressureBucket>> loadAllPressureBuckets() {
+        Map<String, List<PressureBucket>> map = new LinkedHashMap<>();
+        ConfigurationSection itemsSection = pressureDataConfig.getConfigurationSection("items");
+        if (itemsSection == null) return map;
+        for (String itemId : itemsSection.getKeys(false)) {
+            List<PressureBucket> buckets = loadPressureBuckets(itemId);
+            if (!buckets.isEmpty()) {
+                map.put(itemId, buckets);
+            }
+        }
+        return map;
+    }
+
+    @Override
+    public void deleteExpiredPressureBuckets(String itemId, long cutoffTime) {
+        ConfigurationSection bucketsSection = pressureDataConfig.getConfigurationSection("items." + itemId + ".buckets");
+        if (bucketsSection == null) return;
+        boolean changed = false;
+        for (String key : new ArrayList<>(bucketsSection.getKeys(false))) {
+            try {
+                long bucketStart = Long.parseLong(key);
+                if (bucketStart < cutoffTime) {
+                    bucketsSection.set(key, null);
+                    changed = true;
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+        if (changed) {
+            // 如果所有桶都被删除，清理父节点
+            if (bucketsSection.getKeys(false).isEmpty()) {
+                pressureDataConfig.set("items." + itemId, null);
+            }
+            saveFile(pressureDataConfig, pressureFile);
+        }
     }
 
     // ---- Mail ----

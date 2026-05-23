@@ -2,6 +2,9 @@ package net.scarletphantasy.gensouMarket.shop;
 
 import net.scarletphantasy.gensouMarket.GensouMarket;
 import net.scarletphantasy.gensouMarket.config.ConfigManager;
+import net.scarletphantasy.gensouMarket.config.PricingConfigResolver;
+import net.scarletphantasy.gensouMarket.config.RecyclePricingConfig;
+import net.scarletphantasy.gensouMarket.economy.EconomySnapshotService;
 import net.scarletphantasy.gensouMarket.economy.VaultHook;
 import net.scarletphantasy.gensouMarket.model.RecycleItem;
 import net.scarletphantasy.gensouMarket.model.ShopItem;
@@ -14,6 +17,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+
+import net.scarletphantasy.gensouMarket.config.ShopPricingConfig;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -54,9 +59,12 @@ public class ShopManager {
             }
 
             // fixed+limited 且仍为 -1 哨兵：使用配置 initial-stock 作为初值
-            if (configItem.isFixedLimited() && configItem.getAvailableStock() < 0) {
-                int initial = config.getShopInitialStock(id, 0);
-                configItem.setAvailableStock(initial);
+            if (configItem.isFixedLimited()) {
+                int initial = config.getShopInitialStock(id, -1);
+                if (configItem.getAvailableStock() < 0) {
+                    configItem.setAvailableStock(initial >= 0 ? initial : 0);
+                }
+                configItem.setInitialStock(initial >= 0 ? initial : configItem.getAvailableStock());
             }
 
             shopItems.put(id, configItem);
@@ -71,20 +79,81 @@ public class ShopManager {
         return shopItems;
     }
 
+    // ========== v1.1.1 统一价格计算入口 ==========
+
     /**
-     * 根据模式计算当前单价。recycled 模式按"当前回收价 × sellMultiplier"动态计算，下限 0.01。
+     * 构造当前时刻的出售价格上下文。
+     * <p>
+     * 集成模块 13（压力窗口 activeVolume）和模块 15（经济倍率）。
+     */
+    private PriceContext buildSellPriceContext(ShopItem shopItem, RecycleItem recycleSource) {
+        long now = System.currentTimeMillis();
+
+        // 经济倍率（模块 15）
+        EconomySnapshotService economy = plugin.getEconomySnapshotService();
+        double econRecycleMultiplier = economy != null ? economy.getRecycleMultiplier() : 1.0;
+        double econShopMultiplier = economy != null ? economy.getShopMultiplier() : 1.0;
+
+        // 回收压力窗口 activeVolume（模块 13）
+        int activeVolume = 0;
+        if (recycleSource != null) {
+            RecycleManager recycleManager = plugin.getRecycleManager();
+            PricingConfigResolver resolver = recycleManager.getPriceEngine().getConfigResolver();
+            RecyclePricingConfig rcfg = resolver.resolveForRecycleItem(recycleSource.getId());
+            activeVolume = recycleManager.getPressureWindow().getActiveVolume(recycleSource.getId(), rcfg, now);
+        }
+
+        // 库存信息
+        int recycledStock = recycleSource != null ? recycleSource.getRecycledStock() : 0;
+        int currentStock = shopItem.isFixedLimited() ? Math.max(shopItem.getAvailableStock(), 0) : 0;
+        int referenceStock = 0;
+        if (shopItem.isFixedLimited()) {
+            PricingConfigResolver resolver = plugin.getRecycleManager().getPriceEngine().getConfigResolver();
+            ShopPricingConfig shopConfig = resolver.resolveForShopItem(shopItem.getId());
+            if (shopConfig.pricingReferenceStock() != null) {
+                referenceStock = shopConfig.pricingReferenceStock();
+            } else {
+                referenceStock = Math.max(shopItem.getInitialStock(), 1);
+            }
+        }
+
+        return new PriceContext(
+                now,
+                econRecycleMultiplier,
+                econShopMultiplier,
+                activeVolume,
+                recycledStock,
+                currentStock,
+                referenceStock
+        );
+    }
+
+    /**
+     * 计算当前出售价格结果（包含中间值，供 GUI 和调试使用）。
+     *
+     * @param shopItem 商店物品
+     * @return PriceResult 包含 unitPrice 和中间值
+     */
+    public PriceResult computeCurrentPriceResult(ShopItem shopItem) {
+        RecycleItem recycleSource = resolveRecycleSource(shopItem);
+        PriceContext ctx = buildSellPriceContext(shopItem, recycleSource);
+        PriceEngine priceEngine = plugin.getRecycleManager().getPriceEngine();
+        return priceEngine.calculateSellPrice(shopItem, recycleSource, ctx);
+    }
+
+    /**
+     * 根据模式计算当前单价（v1.1.1 统一入口）。
+     * <p>
+     * 三类商品均通过 {@link PriceEngine#calculateSellPrice} 计算：
+     * <ul>
+     *   <li>fixed+unlimited：sellBaseValue × cycleMultiplier × economyShopMultiplier</li>
+     *   <li>fixed+limited：+ 库存稀缺倍率</li>
+     *   <li>recycled：+ 回流库存倍率 + 防套利地板</li>
+     * </ul>
      */
     public double computeCurrentPrice(ShopItem shopItem) {
-        if (!shopItem.isRecycled()) {
-            return shopItem.getCurrentBuyPrice();
-        }
-        RecycleItem source = resolveRecycleSource(shopItem);
-        if (source == null) return 0.0;
-        double fluctuation = plugin.getRecycleManager().getMarketFluctuation()
-                .calculate(source.getId(), System.currentTimeMillis());
-        double recyclePrice = source.getCurrentRecyclePrice(fluctuation);
-        double price = recyclePrice * shopItem.getSellMultiplier();
-        price = Math.round(price * 100.0) / 100.0;
+        PriceResult result = computeCurrentPriceResult(shopItem);
+        double price = result.unitPrice();
         return Math.max(price, 0.01);
     }
 
@@ -139,13 +208,10 @@ public class ShopManager {
             return false;
         }
 
-        // 再检查余额
-        double pricePerUnit = computeCurrentPrice(shopItem);
-        if (pricePerUnit <= 0) {
-            MessageUtil.send(player, "&c该商品当前售价异常，无法购买！");
-            return false;
-        }
-        double totalCost = pricePerUnit * amount;
+        // v1.1.1 统一价格计算
+        PriceResult result = computeCurrentPriceResult(shopItem);
+        double pricePerUnit = Math.max(result.unitPrice(), 0.01);
+        double totalCost = Math.round(pricePerUnit * amount * 100.0) / 100.0;
 
         if (!vault.has(player, totalCost)) {
             MessageUtil.send(player, "&c你没有足够的金币！需要: &e" + MessageUtil.formatMoney(totalCost));
@@ -242,3 +308,4 @@ public class ShopManager {
         return true;
     }
 }
+

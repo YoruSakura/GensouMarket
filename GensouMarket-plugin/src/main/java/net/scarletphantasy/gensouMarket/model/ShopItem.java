@@ -18,8 +18,11 @@ public class ShopItem {
     private StockMode stockMode = StockMode.UNLIMITED;
     // -1 表示尚未从配置初始化；>=0 表示持久化库存值（含 0 缺货）
     private int availableStock = -1;
+    // v1.1.1 补充：记录加载时的初始/参考库存
+    private int initialStock = -1;
     private String recycleSourceId;
     private double sellMultiplier = 1.0;
+    private Double sellValue = null;
 
     public ShopItem(String id, Material material, double baseBuyPrice) {
         this.id = id;
@@ -36,9 +39,7 @@ public class ShopItem {
     public double getBaseBuyPrice() { return baseBuyPrice; }
     public void setBaseBuyPrice(double price) { this.baseBuyPrice = price; }
 
-    public double getCurrentBuyPrice() {
-        return Math.round(baseBuyPrice * 100.0) / 100.0;
-    }
+
 
     public int getTotalBought() { return totalBought; }
     public void setTotalBought(int totalBought) { this.totalBought = totalBought; }
@@ -57,11 +58,17 @@ public class ShopItem {
     public int getAvailableStock() { return availableStock; }
     public void setAvailableStock(int availableStock) { this.availableStock = availableStock; }
 
+    public int getInitialStock() { return initialStock; }
+    public void setInitialStock(int initialStock) { this.initialStock = initialStock; }
+
     public String getRecycleSourceId() { return recycleSourceId; }
     public void setRecycleSourceId(String recycleSourceId) { this.recycleSourceId = recycleSourceId; }
 
     public double getSellMultiplier() { return sellMultiplier; }
     public void setSellMultiplier(double sellMultiplier) { this.sellMultiplier = sellMultiplier; }
+
+    public Double getSellValue() { return sellValue; }
+    public void setSellValue(Double sellValue) { this.sellValue = sellValue; }
 
     public boolean isFixedUnlimited() {
         return mode == Mode.FIXED && stockMode == StockMode.UNLIMITED;

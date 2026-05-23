@@ -25,6 +25,14 @@ public class RemoteActionHandler {
     private final GensouMarket plugin;
     private final ViewSessionRegistry viewRegistry;
 
+    // v1.1.1 跨服消息去重，防止重复消费（如重复收到 Velocity 转发）
+    private final Map<String, Long> processedEvents = new java.util.LinkedHashMap<>(100, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Long> eldest) {
+            return size() > 1000 || System.currentTimeMillis() - eldest.getValue() > 60000;
+        }
+    };
+
     public RemoteActionHandler(GensouMarket plugin, ViewSessionRegistry viewRegistry) {
         this.plugin = plugin;
         this.viewRegistry = viewRegistry;
@@ -47,8 +55,40 @@ public class RemoteActionHandler {
             case AUCTION_ENDED -> { if (plugin.getConfigManager().isAuctionEnabled()) handleAuctionEnded(packet.payload()); }
             case AUCTION_CANCELLED -> { if (plugin.getConfigManager().isAuctionEnabled()) handleAuctionCancelled(packet.payload()); }
             case AUCTION_CREATED -> { if (plugin.getConfigManager().isAuctionEnabled()) handleRefreshAuctionList(); }
+            case PRESSURE_SYNC -> handlePressureSync(packet.payload());
             default -> plugin.getLogger().fine("忽略跨服消息类型: " + packet.type());
         }
+    }
+
+    // ========== v1.1.1 压力同步 ==========
+
+    private void handlePressureSync(Map<String, String> payload) {
+        String eventId = payload.get("eventId");
+        if (eventId != null) {
+            synchronized (processedEvents) {
+                if (processedEvents.containsKey(eventId)) {
+                    plugin.getLogger().fine("[PressureSync] 忽略重复的压力同步事件: " + eventId);
+                    return;
+                }
+                processedEvents.put(eventId, System.currentTimeMillis());
+            }
+        }
+
+        String itemId = payload.get("itemId");
+        long bucketStart = parseLong(payload.get("bucketStart"), -1);
+        int amountDelta = parseInt(payload.get("amountDelta"), 0);
+        if (itemId == null || bucketStart < 0 || amountDelta <= 0) return;
+
+        // 在主线程合并压力到本地缓存
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            var recycleManager = plugin.getRecycleManager();
+            if (recycleManager == null) return;
+            var pressureWindow = recycleManager.getPressureWindow();
+            if (pressureWindow == null) return;
+            pressureWindow.mergeRemotePressure(itemId, bucketStart, amountDelta);
+            plugin.getLogger().fine("[PressureSync] 合并远程压力: item=" + itemId
+                    + " bucket=" + bucketStart + " delta=" + amountDelta);
+        });
     }
 
     // ========== 远程动作 ==========
@@ -329,6 +369,15 @@ public class RemoteActionHandler {
         if (str == null) return def;
         try {
             return Integer.parseInt(str);
+        } catch (NumberFormatException e) {
+            return def;
+        }
+    }
+
+    private static long parseLong(String str, long def) {
+        if (str == null) return def;
+        try {
+            return Long.parseLong(str);
         } catch (NumberFormatException e) {
             return def;
         }

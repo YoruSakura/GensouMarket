@@ -23,6 +23,11 @@ public class VaultHook {
         return true;
     }
 
+    public double getBalance(OfflinePlayer player) {
+        if (economy == null) return 0;
+        return economy.getBalance(player);
+    }
+
     public boolean has(OfflinePlayer player, double amount) {
         return economy.has(player, amount);
     }

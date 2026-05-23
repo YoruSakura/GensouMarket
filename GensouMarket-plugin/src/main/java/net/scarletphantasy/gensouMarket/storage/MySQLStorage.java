@@ -146,6 +146,14 @@ public class MySQLStorage implements StorageProvider {
                 "timestamp BIGINT NOT NULL," +
                 "claimed BOOLEAN NOT NULL DEFAULT FALSE) DEFAULT CHARSET=utf8mb4"
             );
+            stmt.executeUpdate(
+                "CREATE TABLE IF NOT EXISTS price_pressure (" +
+                "item_id VARCHAR(64) NOT NULL," +
+                "bucket_start BIGINT NOT NULL," +
+                "amount INT NOT NULL DEFAULT 0," +
+                "updated_at BIGINT NOT NULL," +
+                "PRIMARY KEY (item_id, bucket_start)) DEFAULT CHARSET=utf8mb4"
+            );
         }
     }
 
@@ -587,7 +595,7 @@ public class MySQLStorage implements StorageProvider {
             ps.setString(2, item.getMaterial().name());
             ps.setDouble(3, item.getBaseRecyclePrice());
             ps.setInt(4, item.getTotalRecycled());
-            ps.setDouble(5, item.getRecycleMultiplier());
+            ps.setDouble(5, 1.0); // 废弃的 recycle_multiplier
             ps.setLong(6, item.getLastUpdate());
             ps.setInt(7, item.getRecycledStock());
             ps.executeUpdate();
@@ -609,7 +617,7 @@ public class MySQLStorage implements StorageProvider {
                 ps.setString(2, item.getMaterial().name());
                 ps.setDouble(3, item.getBaseRecyclePrice());
                 ps.setInt(4, item.getTotalRecycled());
-                ps.setDouble(5, item.getRecycleMultiplier());
+                ps.setDouble(5, 1.0); // 废弃的 recycle_multiplier
                 ps.setLong(6, item.getLastUpdate());
                 ps.setInt(7, item.getRecycledStock());
                 ps.addBatch();
@@ -633,7 +641,7 @@ public class MySQLStorage implements StorageProvider {
                 if (mat == null) continue;
                 RecycleItem item = new RecycleItem(id, mat, rs.getDouble("base_recycle_price"));
                 item.setTotalRecycled(rs.getInt("total_recycled"));
-                item.setRecycleMultiplier(rs.getDouble("recycle_multiplier"));
+                // recycle_multiplier v1.1.1 已弃用
                 item.setLastUpdate(rs.getLong("last_update"));
                 try { item.setRecycledStock(rs.getInt("recycled_stock")); } catch (SQLException ignored) {}
                 map.put(id, item);
@@ -642,6 +650,122 @@ public class MySQLStorage implements StorageProvider {
             logThrottled("[MySQL] 加载回收数据失败", e);
         }
         return map;
+    }
+
+    // ---- Pressure Data (v1.1.1) ----
+
+    @Override
+    public void savePressureBucket(PressureBucket bucket) {
+        String sql = "INSERT INTO price_pressure (item_id, bucket_start, amount, updated_at) " +
+                "VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE amount=VALUES(amount), updated_at=VALUES(updated_at)";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, bucket.itemId());
+            ps.setLong(2, bucket.bucketStart());
+            ps.setInt(3, bucket.amount());
+            ps.setLong(4, bucket.updatedAt());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 保存压力桶失败", e);
+        }
+    }
+
+    @Override
+    public void saveAllPressureBuckets(String itemId, List<PressureBucket> buckets) {
+        // 先删除该物品的所有旧桶，再写入新桶
+        String deleteSql = "DELETE FROM price_pressure WHERE item_id=?";
+        String insertSql = "INSERT INTO price_pressure (item_id, bucket_start, amount, updated_at) VALUES (?,?,?,?)";
+        try (Connection conn = getConnection()) {
+            try (PreparedStatement dps = conn.prepareStatement(deleteSql)) {
+                dps.setString(1, itemId);
+                dps.executeUpdate();
+            }
+            if (!buckets.isEmpty()) {
+                try (PreparedStatement ips = conn.prepareStatement(insertSql)) {
+                    for (PressureBucket b : buckets) {
+                        ips.setString(1, b.itemId());
+                        ips.setLong(2, b.bucketStart());
+                        ips.setInt(3, b.amount());
+                        ips.setLong(4, b.updatedAt());
+                        ips.addBatch();
+                    }
+                    ips.executeBatch();
+                }
+            }
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 批量保存压力桶失败", e);
+        }
+    }
+
+    @Override
+    public void addPressureAmount(String itemId, long bucketStart, int amountDelta, long now) {
+        String sql = "INSERT INTO price_pressure (item_id, bucket_start, amount, updated_at) " +
+                "VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE amount = amount + VALUES(amount), updated_at = VALUES(updated_at)";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, itemId);
+            ps.setLong(2, bucketStart);
+            ps.setInt(3, amountDelta);
+            ps.setLong(4, now);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 原子增加压力失败", e);
+        }
+    }
+
+    @Override
+    public List<PressureBucket> loadPressureBuckets(String itemId) {
+        List<PressureBucket> list = new ArrayList<>();
+        String sql = "SELECT * FROM price_pressure WHERE item_id=? ORDER BY bucket_start ASC";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, itemId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) list.add(mapPressureBucket(rs));
+            }
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 加载压力桶失败", e);
+        }
+        return list;
+    }
+
+    @Override
+    public Map<String, List<PressureBucket>> loadAllPressureBuckets() {
+        Map<String, List<PressureBucket>> map = new LinkedHashMap<>();
+        String sql = "SELECT * FROM price_pressure ORDER BY item_id, bucket_start ASC";
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                PressureBucket b = mapPressureBucket(rs);
+                map.computeIfAbsent(b.itemId(), k -> new ArrayList<>()).add(b);
+            }
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 加载所有压力桶失败", e);
+        }
+        return map;
+    }
+
+    @Override
+    public void deleteExpiredPressureBuckets(String itemId, long cutoffTime) {
+        String sql = "DELETE FROM price_pressure WHERE item_id=? AND bucket_start<?";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, itemId);
+            ps.setLong(2, cutoffTime);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 删除过期压力桶失败", e);
+        }
+    }
+
+    private PressureBucket mapPressureBucket(ResultSet rs) throws SQLException {
+        return new PressureBucket(
+                rs.getString("item_id"),
+                rs.getLong("bucket_start"),
+                rs.getInt("amount"),
+                rs.getLong("updated_at")
+        );
     }
 
     // ---- Mail ----

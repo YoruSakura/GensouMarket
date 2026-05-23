@@ -8,7 +8,8 @@ public class RecycleItem {
     private final Material material;
     private double baseRecyclePrice;
     private int totalRecycled;
-    private double recycleMultiplier;
+    /** @deprecated v1.1.1 起由 PriceEngine smoothstep 压力曲线替代，仅作为旧数据兼容字段保留 */
+    @Deprecated private double recycleMultiplier;
     private long lastUpdate;
     // 回流库存（task-05）：回收成功后 +=，购买 recycled 模式商品后 -=
     private int recycledStock;
@@ -33,19 +34,9 @@ public class RecycleItem {
     public double getBaseRecyclePrice() { return baseRecyclePrice; }
     public void setBaseRecyclePrice(double price) { this.baseRecyclePrice = price; }
 
-    public double getCurrentRecyclePrice() {
-        return Math.round(baseRecyclePrice * recycleMultiplier * 100.0) / 100.0;
-    }
-
-    public double getCurrentRecyclePrice(double marketFluctuation) {
-        return Math.round(baseRecyclePrice * recycleMultiplier * marketFluctuation * 100.0) / 100.0;
-    }
 
     public int getTotalRecycled() { return totalRecycled; }
     public void setTotalRecycled(int totalRecycled) { this.totalRecycled = totalRecycled; }
-
-    public double getRecycleMultiplier() { return recycleMultiplier; }
-    public void setRecycleMultiplier(double m) { this.recycleMultiplier = m; }
 
     public long getLastUpdate() { return lastUpdate; }
     public void setLastUpdate(long lastUpdate) { this.lastUpdate = lastUpdate; }

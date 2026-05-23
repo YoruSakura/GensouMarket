@@ -870,9 +870,10 @@ public class CommandManager implements TabExecutor {
         }
         MessageUtil.send(player, "&6=== 服务器商店价格 ===");
         for (ShopItem item : items.values()) {
+            double price = plugin.getShopManager().computeCurrentPrice(item);
             MessageUtil.sendNoPrefix(player, ItemNameUtil.getLocalizedName(item.getMaterial())
                     .append(Component.text(" 购买: ", NamedTextColor.GREEN))
-                    .append(Component.text(MessageUtil.formatMoney(item.getCurrentBuyPrice()), NamedTextColor.YELLOW)));
+                    .append(Component.text(MessageUtil.formatMoney(price), NamedTextColor.YELLOW)));
         }
     }
 
@@ -884,9 +885,12 @@ public class CommandManager implements TabExecutor {
         }
         MessageUtil.send(player, "&6=== 回收站价格 ===");
         for (RecycleItem item : items.values()) {
+            var engine = plugin.getRecycleManager().getPriceEngine();
+            var ctx = net.scarletphantasy.gensouMarket.gui.RecycleGui.buildRecyclePriceContext(plugin, item);
+            var result = engine.calculateRecyclePrice(item, ctx);
             MessageUtil.sendNoPrefix(player, ItemNameUtil.getLocalizedName(item.getMaterial())
                     .append(Component.text(" 回收: ", NamedTextColor.RED))
-                    .append(Component.text(MessageUtil.formatMoney(item.getCurrentRecyclePrice()), NamedTextColor.YELLOW)));
+                    .append(Component.text(MessageUtil.formatMoney(result.unitPrice()), NamedTextColor.YELLOW)));
         }
     }
 
