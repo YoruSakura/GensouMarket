@@ -237,20 +237,16 @@ public class ShopManager {
         if (shopItem.isFixedLimited()) {
             shopItem.setAvailableStock(Math.max(shopItem.getAvailableStock() - amount, 0));
             shopItem.setLastUpdate(System.currentTimeMillis());
-            ShopItem snapshot = shopItem;
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveShopData(snapshot));
+            storage.saveShopData(shopItem);
         } else if (shopItem.isRecycled() && recycleSource != null) {
             recycleSource.setRecycledStock(Math.max(recycleSource.getRecycledStock() - amount, 0));
             recycleSource.setLastUpdate(System.currentTimeMillis());
-            RecycleItem snapshot = recycleSource;
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveRecycleData(snapshot));
+            storage.saveRecycleData(recycleSource);
             // 同时更新 shop 端 totalBought
-            ShopItem shopSnapshot = shopItem;
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveShopData(shopSnapshot));
+            storage.saveShopData(shopItem);
         } else {
             // fixed+unlimited 只更新 totalBought
-            ShopItem snapshot = shopItem;
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveShopData(snapshot));
+            storage.saveShopData(shopItem);
         }
 
         MessageUtil.send(player, Component.text("成功购买 ", NamedTextColor.GREEN)
@@ -304,8 +300,7 @@ public class ShopManager {
         if (amount < 0) return false;
         item.setAvailableStock(amount);
         item.setLastUpdate(System.currentTimeMillis());
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveShopData(item));
+        storage.saveShopData(item);
         return true;
     }
 }
-

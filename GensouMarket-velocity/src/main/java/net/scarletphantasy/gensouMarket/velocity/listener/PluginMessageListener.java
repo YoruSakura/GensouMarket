@@ -50,7 +50,10 @@ public class PluginMessageListener {
         try {
             packet = PacketCodec.decode(event.getData());
         } catch (UncheckedIOException e) {
-            logger.warn("无法解码来自 {} 的消息: {}", connection.getServerInfo().getName(), e.getMessage());
+            Throwable cause = e.getCause();
+            String detail = cause != null ? cause.getMessage() : e.getMessage();
+            logger.warn("无法解码来自 {} 的消息: {} ({} bytes)",
+                    connection.getServerInfo().getName(), detail, event.getData().length);
             return;
         }
 

@@ -174,8 +174,9 @@ public class RecycleManager {
         recycleItem.addRecycledStock(amount);
         recycleItem.setLastUpdate(now);
 
-        // 9. 异步保存回收数据
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveRecycleData(recycleItem));
+        // 9. 立即保存回收数据。回流库存是关键库存状态，必须在操作成功返回前落库，
+        // 避免玩家回收后立刻 reload / restart 时库存回退。
+        storage.saveRecycleData(recycleItem);
 
         // 发送消息
         MessageUtil.send(player, Component.text("成功回收 ", NamedTextColor.GREEN)
@@ -255,4 +256,3 @@ public class RecycleManager {
         return true;
     }
 }
-

@@ -579,6 +579,14 @@ public class CommandManager implements TabExecutor {
             MessageUtil.send(sender, "&c你没有权限执行此命令！");
             return;
         }
+        // reload 会重新创建配置侧物品对象。先把当前内存中的库存/回流库存写入持久化，
+        // 避免尚未到定时保存周期的数据被新对象覆盖。
+        if (plugin.getShopManager() != null) {
+            plugin.getShopManager().saveAllData();
+        }
+        if (plugin.getRecycleManager() != null) {
+            plugin.getRecycleManager().saveAllData();
+        }
         plugin.getConfigManager().reload();
         plugin.getShopManager().loadItems();
         plugin.getRecycleManager().loadItems();

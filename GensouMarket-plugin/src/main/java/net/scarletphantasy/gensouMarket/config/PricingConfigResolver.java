@@ -35,13 +35,9 @@ public class PricingConfigResolver {
             ? section.getDouble("max-multiplier")
             : defaults.maxMultiplier();
 
-        Double minPrice = section.contains("min-price")
-            ? section.getDouble("min-price")
-            : defaults.minPrice();
+        Double minPrice = optionalDouble(section, "min-price", defaults.minPrice());
 
-        Double maxPrice = section.contains("max-price")
-            ? section.getDouble("max-price")
-            : defaults.maxPrice();
+        Double maxPrice = optionalDouble(section, "max-price", defaults.maxPrice());
 
         int pressureWindowMinutes = section.contains("pressure-window-minutes")
             ? section.getInt("pressure-window-minutes")
@@ -112,17 +108,12 @@ public class PricingConfigResolver {
             ? section.getDouble("max-sell-multiplier")
             : defaults.maxSellMultiplier();
 
-        Integer pricingReferenceStock = section.contains("pricing-reference-stock")
-            ? section.getInt("pricing-reference-stock")
-            : defaults.pricingReferenceStock();
+        Integer pricingReferenceStock = optionalInteger(section, "pricing-reference-stock",
+            defaults.pricingReferenceStock());
 
-        Double minSellPrice = section.contains("min-sell-price")
-            ? section.getDouble("min-sell-price")
-            : defaults.minSellPrice();
+        Double minSellPrice = optionalDouble(section, "min-sell-price", defaults.minSellPrice());
 
-        Double maxSellPrice = section.contains("max-sell-price")
-            ? section.getDouble("max-sell-price")
-            : defaults.maxSellPrice();
+        Double maxSellPrice = optionalDouble(section, "max-sell-price", defaults.maxSellPrice());
 
         boolean fixedDynamicEnabled = section.contains("fixed-dynamic-enabled")
             ? section.getBoolean("fixed-dynamic-enabled")
@@ -186,5 +177,19 @@ public class PricingConfigResolver {
             minSellPrice,
             maxSellPrice
         );
+    }
+
+    private Double optionalDouble(ConfigurationSection section, String key, Double fallback) {
+        if (!section.contains(key)) {
+            return fallback;
+        }
+        return Double.valueOf(section.getDouble(key));
+    }
+
+    private Integer optionalInteger(ConfigurationSection section, String key, Integer fallback) {
+        if (!section.contains(key)) {
+            return fallback;
+        }
+        return Integer.valueOf(section.getInt(key));
     }
 }
