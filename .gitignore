@@ -23,8 +23,7 @@ claude-start*.sh
 
 # Local release / development docs
 1.1版本开发想法.md
-Claude.md
-claude.md
+[Cc][Ll][Aa][Uu][Dd][Ee].md
 .claude/
 doc/
 MC插件开发踩坑总结.md
