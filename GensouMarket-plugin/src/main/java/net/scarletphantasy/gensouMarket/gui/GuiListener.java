@@ -6,6 +6,8 @@ import net.scarletphantasy.gensouMarket.model.Auction;
 import net.scarletphantasy.gensouMarket.model.MarketListing;
 import net.scarletphantasy.gensouMarket.model.RecycleItem;
 import net.scarletphantasy.gensouMarket.model.ShopItem;
+import net.scarletphantasy.gensouMarket.shop.PriceEngine;
+import net.scarletphantasy.gensouMarket.shop.PriceResult;
 import net.scarletphantasy.gensouMarket.trade.TradeManager;
 import net.scarletphantasy.gensouMarket.trade.TradeManager.TradeSession;
 import org.bukkit.Bukkit;
@@ -31,7 +33,7 @@ public class GuiListener implements Listener {
     private final GensouMarket plugin;
     private static final long CONFIRM_TIMEOUT_MS = 5000;
 
-    private record PendingAction(String type, int targetId, long timestamp) {}
+    private record PendingAction(String type, int targetId, long timestamp, double snapshotPrice) {}
     private final Map<UUID, PendingAction> pendingConfirmations = new ConcurrentHashMap<>();
 
     public GuiListener(GensouMarket plugin) {
@@ -39,9 +41,18 @@ public class GuiListener implements Listener {
     }
 
     /**
-     * 检查二次确认。返回 true 表示确认通过可执行操作，false 表示首次点击已提示。
+     * 检查二次确认（无价格快照版本，向后兼容市场/拍卖）。
      */
     private boolean checkConfirmation(Player player, String actionType, int targetId, String confirmMessage) {
+        return checkConfirmationWithPrice(player, actionType, targetId, confirmMessage, -1);
+    }
+
+    /**
+     * 检查二次确认（带价格快照）。
+     * @param snapshotPrice 首次点击时的价格快照；-1 表示不进行锁价校验
+     */
+    private boolean checkConfirmationWithPrice(Player player, String actionType, int targetId,
+                                                String confirmMessage, double snapshotPrice) {
         UUID uuid = player.getUniqueId();
         PendingAction pending = pendingConfirmations.get(uuid);
         long now = System.currentTimeMillis();
@@ -52,10 +63,11 @@ public class GuiListener implements Listener {
             return true;
         }
 
-        pendingConfirmations.put(uuid, new PendingAction(actionType, targetId, now));
+        pendingConfirmations.put(uuid, new PendingAction(actionType, targetId, now, snapshotPrice));
         MessageUtil.send(player, confirmMessage);
         return false;
     }
+
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
@@ -572,13 +584,33 @@ public class GuiListener implements Listener {
             if (index < items.size()) {
                 ShopItem shopItem = items.get(index);
                 int amount = event.isShiftClick() ? 64 : 1;
-                double cost = shopItem.getCurrentBuyPrice() * amount;
-                if (!checkConfirmation(player, "shop_buy_" + amount, index,
-                        "&e再次点击确认购买 &6" + amount + "x&e，花费: &6" + MessageUtil.formatMoney(cost))) {
-                    return;
+                double currentUnitPrice = plugin.getShopManager().computeCurrentPrice(shopItem);
+                double totalCost = Math.round(currentUnitPrice * amount * 100.0) / 100.0;
+
+                String actionKey = "shop_buy_" + amount;
+                UUID uuid = player.getUniqueId();
+                PendingAction pending = pendingConfirmations.get(uuid);
+                long now = System.currentTimeMillis();
+
+                if (pending != null && pending.type().equals(actionKey) && pending.targetId() == index
+                        && (now - pending.timestamp()) < CONFIRM_TIMEOUT_MS) {
+                    // 确认阶段：锁价校验
+                    pendingConfirmations.remove(uuid);
+                    double snapshotPrice = pending.snapshotPrice();
+                    double tolerance = plugin.getConfigManager().getPriceChangeTolerance();
+                    if (snapshotPrice > 0 && Math.abs(totalCost - snapshotPrice) / snapshotPrice > tolerance) {
+                        MessageUtil.send(player, String.format("&c价格已变化超过 %d%%，请重新确认！ (快照: &e%s&c → 当前: &e%s&c)",
+                                (int) (tolerance * 100), MessageUtil.formatMoney(snapshotPrice), MessageUtil.formatMoney(totalCost)));
+                        ShopGui.openShop(plugin, player, page);
+                        return;
+                    }
+                    plugin.getShopManager().buyFromShop(player, shopItem.getId(), amount);
+                    ShopGui.openShop(plugin, player, page);
+                } else {
+                    // 首次点击：记录价格快照
+                    pendingConfirmations.put(uuid, new PendingAction(actionKey, index, now, totalCost));
+                    MessageUtil.send(player, "&e再次点击确认购买 &6" + amount + "x&e，花费: &6" + MessageUtil.formatMoney(totalCost));
                 }
-                plugin.getShopManager().buyFromShop(player, shopItem.getId(), amount);
-                ShopGui.openShop(plugin, player, page);
             }
         }
     }
@@ -608,13 +640,51 @@ public class GuiListener implements Listener {
             int index = page * 45 + slot;
             if (index < items.size()) {
                 RecycleItem recycleItem = items.get(index);
-                int amount = event.isLeftClick() ? 1 : 64;
-                if (!checkConfirmation(player, "recycle_" + amount, index,
-                        "&e再次点击确认回收 &6" + amount + "x " + recycleItem.getMaterial().name())) {
+                
+                int available = 0;
+                for (ItemStack item : player.getInventory().getContents()) {
+                    if (item != null && item.getType() == recycleItem.getMaterial()) {
+                        available += item.getAmount();
+                    }
+                }
+                
+                if (available <= 0) {
+                    MessageUtil.send(player, "&c你的背包中没有该物品！");
                     return;
                 }
-                plugin.getRecycleManager().recycleItem(player, recycleItem, amount);
-                RecycleGui.openRecycle(plugin, player, page);
+
+                int amount = event.isLeftClick() ? 1 : Math.min(64, available);
+
+                // 获取当前回收单价/总价（用于锁价快照，使用完整压力上下文）
+                PriceEngine engine = plugin.getRecycleManager().getPriceEngine();
+                PriceResult currentResult = engine.calculateBatchRecyclePrice(recycleItem,
+                        RecycleGui.buildRecyclePriceContext(plugin, recycleItem), amount);
+                double currentPriceToCompare = currentResult.totalPrice();
+
+                String actionKey = "recycle_" + amount;
+                UUID uuid = player.getUniqueId();
+                PendingAction pending = pendingConfirmations.get(uuid);
+                long now = System.currentTimeMillis();
+
+                if (pending != null && pending.type().equals(actionKey) && pending.targetId() == index
+                        && (now - pending.timestamp()) < CONFIRM_TIMEOUT_MS) {
+                    // 确认阶段：锁价校验
+                    pendingConfirmations.remove(uuid);
+                    double snapshotPrice = pending.snapshotPrice();
+                    double tolerance = plugin.getConfigManager().getPriceChangeTolerance();
+                    if (snapshotPrice > 0 && Math.abs(currentPriceToCompare - snapshotPrice) / snapshotPrice > tolerance) {
+                        MessageUtil.send(player, String.format("&c回收价格已变化超过 %d%%，请重新确认！ (快照: &e%s&c → 当前: &e%s&c)",
+                                (int) (tolerance * 100), MessageUtil.formatMoney(snapshotPrice), MessageUtil.formatMoney(currentPriceToCompare)));
+                        RecycleGui.openRecycle(plugin, player, page);
+                        return;
+                    }
+                    plugin.getRecycleManager().recycleItem(player, recycleItem, amount);
+                    RecycleGui.openRecycle(plugin, player, page);
+                } else {
+                    // 首次点击：记录价格快照
+                    pendingConfirmations.put(uuid, new PendingAction(actionKey, index, now, currentPriceToCompare));
+                    MessageUtil.send(player, "&e再次点击确认回收 &6" + amount + "x " + recycleItem.getMaterial().name());
+                }
             }
         }
     }

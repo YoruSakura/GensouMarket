@@ -3,14 +3,15 @@
 # ==============================
 # 服务器卖给玩家的物品支持两种模式：
 #   - fixed:    管理员固定出售。价格固定，库存可为无限或有限。
-#   - recycled: 回收回流出售。库存来自对应回收物品的回流库存池，售价按"当前回收价 × sell-multiplier"计算。
+#   - recycled: 回收回流出售。库存来自对应回收物品的回流库存池。
 #
 # 通用字段:
 #   material:         Bukkit Material 名称
 #   mode:             fixed 或 recycled
+#   sell-value:       (可选) 显式指定标准售价，优先级最高。如果设置了，sell-multiplier 将被忽略。
 #
 # mode=fixed 必须字段:
-#   buy-price:        玩家购买价格（固定）
+#   buy-price:        玩家购买价格（固定/基准）
 #   stock-mode:       unlimited 或 limited
 #
 # mode=fixed + stock-mode=limited 额外字段:
@@ -18,7 +19,8 @@
 #
 # mode=recycled 必须字段:
 #   recycle-source:   recycle.yml 中某个物品 id，售卖库存从该 RecycleItem.recycled-stock 消费
-#   sell-multiplier:  售价倍率（当前售价 = 当前回收价 × sell-multiplier，下限 0.01）
+#   sell-multiplier:  (当未配置 sell-value 时生效) 售价倍率。出售标准价值 = recycle-source基准回收价 × sell-multiplier
+#                     最终售价仍会经过周期波动、经济倍率、防套利等动态价格规则的影响。
 #
 # 旧配置兼容：缺少 mode 字段时默认按 fixed + unlimited 处理。
 # /gmarket shop add <价格> 只创建 fixed + unlimited 商品。

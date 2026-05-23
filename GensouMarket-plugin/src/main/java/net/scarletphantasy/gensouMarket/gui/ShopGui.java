@@ -3,6 +3,7 @@ package net.scarletphantasy.gensouMarket.gui;
 import net.scarletphantasy.gensouMarket.GensouMarket;
 import net.scarletphantasy.gensouMarket.model.RecycleItem;
 import net.scarletphantasy.gensouMarket.model.ShopItem;
+import net.scarletphantasy.gensouMarket.shop.PriceResult;
 import net.scarletphantasy.gensouMarket.shop.ShopManager;
 import net.scarletphantasy.gensouMarket.util.ItemNameUtil;
 import net.scarletphantasy.gensouMarket.util.MessageUtil;
@@ -47,7 +48,8 @@ public final class ShopGui {
         ShopManager shopManager = plugin.getShopManager();
         for (int i = start; i < end; i++) {
             ShopItem shopItem = itemList.get(i);
-            double price = shopManager.computeCurrentPrice(shopItem);
+            PriceResult result = shopManager.computeCurrentPriceResult(shopItem);
+            double price = Math.max(result.unitPrice(), 0.01);
             int stock = shopManager.computeAvailableStock(shopItem);
             boolean outOfStock = stock <= 0;
 
@@ -57,7 +59,7 @@ public final class ShopGui {
                 meta.displayName(ItemNameUtil.getLocalizedName(shopItem.getMaterial()));
                 List<Component> lore = new ArrayList<>();
                 lore.add(Component.empty());
-                lore.addAll(buildModeLore(shopItem, shopManager, price, stock, outOfStock));
+                lore.addAll(buildModeLore(shopItem, shopManager, result, price, stock, outOfStock));
                 lore.add(Component.empty());
                 if (outOfStock) {
                     lore.add(LEGACY.deserialize("&c&l缺货中"));
@@ -86,31 +88,64 @@ public final class ShopGui {
     }
 
     private static List<Component> buildModeLore(ShopItem shopItem, ShopManager shopManager,
-                                                 double price, int stock, boolean outOfStock) {
+                                                 PriceResult result, double price, int stock, boolean outOfStock) {
         List<Component> lore = new ArrayList<>();
         String priceStr = MessageUtil.formatMoney(price);
+
         if (shopItem.isFixedUnlimited()) {
-            lore.add(LEGACY.deserialize("&a购买价格: &e" + priceStr + " &7(固定)"));
+            boolean isDynamic = result.cycleMultiplier() != 1.0 || result.economyMultiplier() != 1.0;
+            String tag = isDynamic ? " &7(动态)" : " &7(固定)";
+            lore.add(LEGACY.deserialize("&a购买价格: &e" + priceStr + tag));
             lore.add(LEGACY.deserialize("&7库存: &f无限"));
+            if (isDynamic) {
+                addDynamicIndicators(lore, result);
+            }
         } else if (shopItem.isFixedLimited()) {
-            lore.add(LEGACY.deserialize("&a购买价格: &e" + priceStr + " &7(固定)"));
+            boolean isDynamic = result.stockMultiplier() != 1.0 || result.cycleMultiplier() != 1.0;
+            String tag = isDynamic ? " &7(动态)" : " &7(固定)";
+            lore.add(LEGACY.deserialize("&a购买价格: &e" + priceStr + tag));
             if (outOfStock) {
                 lore.add(LEGACY.deserialize("&7库存: &c0 (缺货)"));
             } else {
                 lore.add(LEGACY.deserialize("&7库存: &f" + stock));
+            }
+            if (isDynamic) {
+                addDynamicIndicators(lore, result);
             }
         } else if (shopItem.isRecycled()) {
             lore.add(LEGACY.deserialize("&a当前售价: &e" + priceStr + " &7(动态)"));
             RecycleItem source = shopManager.resolveRecycleSource(shopItem);
             String sourceName = source != null ? source.getId() : "?";
             lore.add(LEGACY.deserialize("&7回流来源: &f" + sourceName));
-            lore.add(LEGACY.deserialize("&7倍率: &f" + shopItem.getSellMultiplier()));
             if (outOfStock) {
                 lore.add(LEGACY.deserialize("&7回流库存: &c0 (缺货)"));
             } else {
                 lore.add(LEGACY.deserialize("&7回流库存: &f" + stock));
             }
+            addDynamicIndicators(lore, result);
         }
         return lore;
     }
+
+    /**
+     * 添加动态价格来源指示器。
+     */
+    private static void addDynamicIndicators(List<Component> lore, PriceResult result) {
+        if (result.cycleMultiplier() != 1.0) {
+            String pct = String.format("%+.1f%%", (result.cycleMultiplier() - 1.0) * 100);
+            lore.add(LEGACY.deserialize("&7  周期波动: &f" + pct));
+        }
+        if (result.economyMultiplier() != 1.0) {
+            String pct = String.format("%.2fx", result.economyMultiplier());
+            lore.add(LEGACY.deserialize("&7  经济倍率: &f" + pct));
+        }
+        if (result.stockMultiplier() != 1.0) {
+            String pct = String.format("%.2fx", result.stockMultiplier());
+            lore.add(LEGACY.deserialize("&7  库存影响: &f" + pct));
+        }
+        if (result.antiArbitrageApplied()) {
+            lore.add(LEGACY.deserialize("&c  ⚠ 防套利保护生效"));
+        }
+    }
 }
+

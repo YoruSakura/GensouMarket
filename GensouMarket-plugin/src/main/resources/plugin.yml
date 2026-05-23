@@ -4,6 +4,7 @@ main: net.scarletphantasy.gensouMarket.GensouMarket
 api-version: '1.21'
 prefix: 幻想集市
 depend: [Vault]
+softdepend: [CMI]
 commands:
   gensoumarket:
     description: 幻想集市主命令

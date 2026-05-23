@@ -97,58 +97,83 @@ public class ConfigManager {
 
     // ---- Dynamic Pricing ----
     public boolean isDynamicPricingEnabled() { return config.getBoolean("dynamic-pricing.enabled", true); }
-    public double getAdjustmentRate() { return config.getDouble("dynamic-pricing.adjustment-rate", 0.002); }
-    public double getMaxMultiplier() { return config.getDouble("dynamic-pricing.max-multiplier", 3.0); }
-    public double getMinMultiplier() { return config.getDouble("dynamic-pricing.min-multiplier", 0.1); }
-    public double getRecoveryRate() { return config.getDouble("dynamic-pricing.recovery-rate", 0.01); }
 
-    // ---- Market Fluctuation ----
-    public record SineWaveConfig(double periodHours, double amplitude) {}
 
-    public boolean isMarketFluctuationEnabled() {
-        return config.getBoolean("dynamic-pricing.market-fluctuation.enabled", true);
+
+
+    // ---- v1.1.1 回收定价模块级默认 ----
+    public RecyclePricingConfig getRecyclePricingDefaults() {
+        return new RecyclePricingConfig(
+            config.getBoolean("dynamic-pricing.enabled", true),
+            config.getInt("dynamic-pricing.recycle.pressure-window-minutes", 120),
+            config.getInt("dynamic-pricing.recycle.bucket-seconds", 60),
+            config.getInt("dynamic-pricing.recycle.min-price-volume", 4096),
+            config.getDouble("dynamic-pricing.recycle.min-multiplier", 0.5),
+            config.getDouble("dynamic-pricing.recycle.max-multiplier", 1.5),
+            config.getDouble("dynamic-pricing.recycle.cycle-period-hours", 24),
+            config.getDouble("dynamic-pricing.recycle.cycle-amplitude", 0.20),
+            null,
+            null
+        );
     }
 
-    public List<SineWaveConfig> getFluctuationSineWaves() {
-        List<SineWaveConfig> waves = new ArrayList<>();
-        List<?> list = config.getList("dynamic-pricing.market-fluctuation.sine-waves");
-        if (list != null) {
-            for (Object obj : list) {
+    // ---- v1.1.1 商店定价模块级默认 ----
+    public ShopPricingConfig getShopPricingDefaults() {
+        return new ShopPricingConfig(
+            config.getBoolean("dynamic-pricing.enabled", true),
+            config.getDouble("dynamic-pricing.shop.min-sell-multiplier", 0.8),
+            config.getDouble("dynamic-pricing.shop.max-sell-multiplier", 1.5),
+            config.getBoolean("dynamic-pricing.shop.fixed-dynamic-enabled", false),
+            config.getBoolean("dynamic-pricing.shop.recycled-dynamic-enabled", true),
+            config.getDouble("dynamic-pricing.shop.min-stock-multiplier", 1.0),
+            config.getDouble("dynamic-pricing.shop.max-stock-multiplier", 1.5),
+            config.getInt("dynamic-pricing.shop.target-recycled-stock", 4096),
+            config.getDouble("dynamic-pricing.shop.min-recycled-stock-multiplier", 0.85),
+            config.getDouble("dynamic-pricing.shop.max-recycled-stock-multiplier", 1.35),
+            config.getDouble("dynamic-pricing.shop.anti-arbitrage-multiplier", 1.15),
+            null,
+            null,
+            null
+        );
+    }
+
+    // ---- v1.1.1 价格变动确认容差 ----
+    public double getPriceChangeTolerance() {
+        return config.getDouble("dynamic-pricing.confirmation.price-change-tolerance", 0.05);
+    }
+
+    // ---- v1.1.1 经济平衡配置 ----
+    public EconomyBalanceConfig getEconomyBalanceConfig() {
+        boolean enabled = config.getBoolean("economy-balance.enabled", true);
+        int interval = config.getInt("economy-balance.snapshot-interval-minutes", 10);
+        List<EconomyBalanceConfig.Stage> stages = new ArrayList<>();
+        List<?> rawStages = config.getList("economy-balance.stages");
+        if (rawStages != null) {
+            for (Object obj : rawStages) {
                 if (obj instanceof Map<?, ?> map) {
-                    Object periodObj = map.get("period");
-                    Object ampObj = map.get("amplitude");
-                    double period = periodObj instanceof Number n ? n.doubleValue() : 24.0;
-                    double amplitude = ampObj instanceof Number n ? n.doubleValue() : 0.08;
-                    waves.add(new SineWaveConfig(period, amplitude));
+                    long maxTotal = map.containsKey("max-total") ? ((Number) map.get("max-total")).longValue() : -1;
+                    double recycleMult = map.containsKey("recycle-multiplier") ? ((Number) map.get("recycle-multiplier")).doubleValue() : 1.0;
+                    double shopMult = map.containsKey("shop-multiplier") ? ((Number) map.get("shop-multiplier")).doubleValue() : 1.0;
+                    stages.add(new EconomyBalanceConfig.Stage(maxTotal, recycleMult, shopMult));
                 }
             }
         }
-        if (waves.isEmpty()) {
-            waves.add(new SineWaveConfig(24, 0.08));
-            waves.add(new SineWaveConfig(72, 0.12));
-            waves.add(new SineWaveConfig(168, 0.10));
+        if (stages.isEmpty()) {
+            stages.add(new EconomyBalanceConfig.Stage(1000000, 1.15, 0.90));
+            stages.add(new EconomyBalanceConfig.Stage(5000000, 1.0, 1.0));
+            stages.add(new EconomyBalanceConfig.Stage(10000000, 0.85, 1.15));
+            stages.add(new EconomyBalanceConfig.Stage(-1, 0.70, 1.35));
         }
-        return waves;
+        return new EconomyBalanceConfig(enabled, interval, List.copyOf(stages));
     }
 
-    public double getFluctuationNoiseAmplitude() {
-        return config.getDouble("dynamic-pricing.market-fluctuation.noise-amplitude", 0.06);
+    // ---- v1.1.1 物品级 pricing section 访问 ----
+    public ConfigurationSection getRecycleItemPricingSection(String itemId) {
+        return recycleConfig.getConfigurationSection("items." + itemId + ".pricing");
     }
 
-    public double getFluctuationNoiseScale() {
-        return config.getDouble("dynamic-pricing.market-fluctuation.noise-scale", 12.0);
-    }
-
-    public double getMinFluctuation() {
-        return config.getDouble("dynamic-pricing.market-fluctuation.min-fluctuation", 0.5);
-    }
-
-    public double getMaxFluctuation() {
-        return config.getDouble("dynamic-pricing.market-fluctuation.max-fluctuation", 1.5);
-    }
-
-    public int getFluctuationCycleMinutes() {
-        return config.getInt("dynamic-pricing.market-fluctuation.cycle-minutes", 20);
+    public ConfigurationSection getShopItemPricingSection(String itemId) {
+        return shopConfig.getConfigurationSection("items." + itemId + ".pricing");
     }
 
     // ---- Trade ----
@@ -188,6 +213,13 @@ public class ConfigManager {
 
             double buyPrice = itemSec.getDouble("buy-price", 0);
             ShopItem item = new ShopItem(key, material, buyPrice);
+
+            if (itemSec.contains("sell-value")) {
+                item.setSellValue(itemSec.getDouble("sell-value"));
+                if (itemSec.contains("sell-multiplier")) {
+                    plugin.getLogger().warning("商店配置: 物品 " + key + " 同时配置了 sell-value 与 sell-multiplier。由于 sell-value 优先级更高，sell-multiplier 将被忽略！");
+                }
+            }
 
             // 模式解析（旧数据无 mode 字段则按 fixed + unlimited 兼容）
             String modeStr = itemSec.getString("mode", "fixed");
@@ -229,8 +261,8 @@ public class ConfigManager {
      */
     public int getShopInitialStock(String id, int fallback) {
         ConfigurationSection section = shopConfig.getConfigurationSection("items." + id);
-        if (section == null) return fallback;
-        int v = section.getInt("initial-stock", fallback);
+        if (section == null || !section.contains("initial-stock")) return fallback;
+        int v = section.getInt("initial-stock");
         return Math.max(v, 0);
     }
 

@@ -58,39 +58,74 @@ shop:
 recycle:
   enabled: true
 
-# 动态价格配置 (仅影响回收价格，商店售卖价格固定)
+# 动态价格配置 (v1.1.1: 回收价格 + 服务器商店售价均受影响)
 dynamic-pricing:
   enabled: true
-  # 每次出售对回收价格的影响系数
-  adjustment-rate: 0.002
-  # 回收价格上限倍率 (相对基础回收价格)
-  max-multiplier: 3.0
-  # 回收价格下限倍率 (相对基础回收价格)
-  min-multiplier: 0.1
-  # 回收价格恢复速率 (每小时恢复到基准价格的比例)
-  recovery-rate: 0.01
-  # 市场波动配置 (使回收价格随时间自然波动)
-  market-fluctuation:
-    # 是否启用市场波动 (独立于供需系统)
-    enabled: true
-    # 正弦波层 (period=周期小时, amplitude=振幅)
-    sine-waves:
-      - period: 24
-        amplitude: 0.08
-      - period: 72
-        amplitude: 0.12
-      - period: 168
-        amplitude: 0.10
-    # Perlin Noise 振幅
-    noise-amplitude: 0.06
-    # Perlin Noise 缩放 (小时)
-    noise-scale: 12.0
-    # 波动下限
-    min-fluctuation: 0.5
-    # 波动上限
-    max-fluctuation: 1.5
-    # 涨跌对比周期 (分钟)
-    cycle-minutes: 20
+
+  # 回收价格动态调整
+  recycle:
+    # 回收压力滑动窗口（分钟），窗口内回收量越多价格越低，过期后压力消退
+    pressure-window-minutes: 120
+    # 压力桶粒度（秒），窗口内按此粒度分桶统计
+    bucket-seconds: 60
+    # 最低价格触发量（窗口内回收量达到此值时价格降至下限）
+    min-price-volume: 4096
+    # 回收价格下限倍率（相对 recycle-price）
+    min-multiplier: 0.5
+    # 回收价格上限倍率（相对 recycle-price）
+    max-multiplier: 1.5
+    # 周期波动周期（小时）
+    cycle-period-hours: 24
+    # 周期波动振幅（0.20 = ±20%）
+    cycle-amplitude: 0.20
+
+  # 商店售价动态调整
+  shop:
+    # 售价倍率下限
+    min-sell-multiplier: 0.8
+    # 售价倍率上限
+    max-sell-multiplier: 1.5
+    # fixed 模式是否启用动态售价（默认关闭）
+    fixed-dynamic-enabled: false
+    # recycled 模式是否启用动态售价（默认开启）
+    recycled-dynamic-enabled: true
+    # 库存对 fixed+limited 售价的影响倍率下限
+    min-stock-multiplier: 1.0
+    # 库存对 fixed+limited 售价的影响倍率上限
+    max-stock-multiplier: 1.5
+    # 回流库存目标值（recycled 模式，库存达到此值时售价最低）
+    target-recycled-stock: 4096
+    # 回流库存充裕时售价倍率下限
+    min-recycled-stock-multiplier: 0.85
+    # 回流库存稀缺时售价倍率上限
+    max-recycled-stock-multiplier: 1.35
+    # 反套利倍率（售价 >= 回收价 × 此倍率，防止低买高卖）
+    anti-arbitrage-multiplier: 1.15
+
+  # 价格变动确认
+  confirmation:
+    # 价格变动超过此比例时弹出二次确认（0.05 = 5%）
+    price-change-tolerance: 0.05
+
+# 经济平衡阶段配置（根据全服总经济量调节回收/商店倍率）
+economy-balance:
+  enabled: true
+  # 全服余额快照间隔（分钟）
+  snapshot-interval-minutes: 10
+  # 经济阶段（按 max-total 升序排列，最后一条 max-total: -1 为兜底）
+  stages:
+    - max-total: 1000000
+      recycle-multiplier: 1.15
+      shop-multiplier: 0.90
+    - max-total: 5000000
+      recycle-multiplier: 1.0
+      shop-multiplier: 1.0
+    - max-total: 10000000
+      recycle-multiplier: 0.85
+      shop-multiplier: 1.15
+    - max-total: -1
+      recycle-multiplier: 0.70
+      shop-multiplier: 1.35
 
 # 面对面交易配置
 trade:

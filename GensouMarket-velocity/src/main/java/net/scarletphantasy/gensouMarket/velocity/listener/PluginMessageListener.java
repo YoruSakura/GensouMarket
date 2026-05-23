@@ -70,7 +70,8 @@ public class PluginMessageListener {
                  AUCTION_CANCELLED,
                  MAIL_CREATED,
                  REFRESH_MARKET_VIEW,
-                 REFRESH_AUCTION_VIEW -> handleBroadcast(packet);
+                 REFRESH_AUCTION_VIEW,
+                 PRESSURE_SYNC -> handleBroadcast(packet);
 
             // 定向投递类：根据目标玩家路由到所在后端
             case PLAYER_NOTIFY,

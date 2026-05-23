@@ -165,6 +165,29 @@ public class ClusterEventPublisher {
         bridge.send(packet);
     }
 
+    // ========== v1.1.1 价格压力同步 ==========
+
+    /**
+     * 回收成功后广播压力增量到其他子服。
+     *
+     * @param itemId           物品 ID
+     * @param bucketStartMillis 桶起始时间戳
+     * @param amountDelta      本次回收增量
+     * @param activeVolume     回收后的 activeVolume（供其他服快速覆盖）
+     * @param eventTimeMillis  事件发生时间
+     */
+    public void publishPressureSync(String itemId, long bucketStartMillis, int amountDelta,
+                                     int activeVolume, long eventTimeMillis) {
+        OutgoingPacket packet = newPacket(PacketType.PRESSURE_SYNC);
+        packet.put("eventId", UUID.randomUUID().toString());
+        packet.put("itemId", itemId);
+        packet.put("bucketStart", String.valueOf(bucketStartMillis));
+        packet.put("amountDelta", String.valueOf(amountDelta));
+        packet.put("activeVolume", String.valueOf(activeVolume));
+        packet.put("eventTime", String.valueOf(eventTimeMillis));
+        bridge.send(packet);
+    }
+
     private OutgoingPacket newPacket(PacketType type) {
         return new OutgoingPacket(type, bridge.newRequestId(), bridge.getServerId());
     }

@@ -95,6 +95,14 @@ public class SQLiteStorage implements StorageProvider {
                 "timestamp INTEGER NOT NULL," +
                 "claimed INTEGER NOT NULL DEFAULT 0)"
             );
+            stmt.executeUpdate(
+                "CREATE TABLE IF NOT EXISTS price_pressure (" +
+                "item_id TEXT NOT NULL," +
+                "bucket_start INTEGER NOT NULL," +
+                "amount INTEGER NOT NULL DEFAULT 0," +
+                "updated_at INTEGER NOT NULL," +
+                "PRIMARY KEY (item_id, bucket_start))"
+            );
         }
     }
 
@@ -505,7 +513,7 @@ public class SQLiteStorage implements StorageProvider {
             ps.setString(2, item.getMaterial().name());
             ps.setDouble(3, item.getBaseRecyclePrice());
             ps.setInt(4, item.getTotalRecycled());
-            ps.setDouble(5, item.getRecycleMultiplier());
+            ps.setDouble(5, 1.0); // 废弃的 recycle_multiplier
             ps.setLong(6, item.getLastUpdate());
             ps.setInt(7, item.getRecycledStock());
             ps.executeUpdate();
@@ -523,7 +531,7 @@ public class SQLiteStorage implements StorageProvider {
                 ps.setString(2, item.getMaterial().name());
                 ps.setDouble(3, item.getBaseRecyclePrice());
                 ps.setInt(4, item.getTotalRecycled());
-                ps.setDouble(5, item.getRecycleMultiplier());
+                ps.setDouble(5, 1.0); // 废弃的 recycle_multiplier
                 ps.setLong(6, item.getLastUpdate());
                 ps.setInt(7, item.getRecycledStock());
                 ps.addBatch();
@@ -546,7 +554,7 @@ public class SQLiteStorage implements StorageProvider {
                 if (mat == null) continue;
                 RecycleItem item = new RecycleItem(id, mat, rs.getDouble("base_recycle_price"));
                 item.setTotalRecycled(rs.getInt("total_recycled"));
-                item.setRecycleMultiplier(rs.getDouble("recycle_multiplier"));
+                // item.setRecycleMultiplier(rs.getDouble("recycle_multiplier")); v1.1.1 已弃用
                 item.setLastUpdate(rs.getLong("last_update"));
                 item.setRecycledStock(rs.getInt("recycled_stock"));
                 map.put(id, item);
@@ -555,6 +563,128 @@ public class SQLiteStorage implements StorageProvider {
             LOGGER.log(Level.WARNING, "[SQLite] 加载回收数据失败", e);
         }
         return map;
+    }
+
+    // ---- Pressure Data (v1.1.1) ----
+
+    @Override
+    public void savePressureBucket(PressureBucket bucket) {
+        String sql = "INSERT OR REPLACE INTO price_pressure (item_id, bucket_start, amount, updated_at) VALUES (?,?,?,?)";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, bucket.itemId());
+            ps.setLong(2, bucket.bucketStart());
+            ps.setInt(3, bucket.amount());
+            ps.setLong(4, bucket.updatedAt());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 保存压力桶失败", e);
+        }
+    }
+
+    @Override
+    public void saveAllPressureBuckets(String itemId, List<PressureBucket> buckets) {
+        try {
+            try (PreparedStatement dps = connection.prepareStatement("DELETE FROM price_pressure WHERE item_id=?")) {
+                dps.setString(1, itemId);
+                dps.executeUpdate();
+            }
+            if (!buckets.isEmpty()) {
+                String sql = "INSERT INTO price_pressure (item_id, bucket_start, amount, updated_at) VALUES (?,?,?,?)";
+                try (PreparedStatement ips = connection.prepareStatement(sql)) {
+                    for (PressureBucket b : buckets) {
+                        ips.setString(1, b.itemId());
+                        ips.setLong(2, b.bucketStart());
+                        ips.setInt(3, b.amount());
+                        ips.setLong(4, b.updatedAt());
+                        ips.addBatch();
+                    }
+                    ips.executeBatch();
+                }
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 批量保存压力桶失败", e);
+        }
+    }
+
+    @Override
+    public void addPressureAmount(String itemId, long bucketStart, int amountDelta, long now) {
+        String update = "UPDATE price_pressure SET amount = amount + ?, updated_at = ? WHERE item_id = ? AND bucket_start = ?";
+        String insert = "INSERT OR IGNORE INTO price_pressure (item_id, bucket_start, amount, updated_at) VALUES (?, ?, ?, ?)";
+        try {
+            boolean autoCommit = connection.getAutoCommit();
+            connection.setAutoCommit(false);
+            try (PreparedStatement up = connection.prepareStatement(update)) {
+                up.setInt(1, amountDelta);
+                up.setLong(2, now);
+                up.setString(3, itemId);
+                up.setLong(4, bucketStart);
+                if (up.executeUpdate() == 0) {
+                    try (PreparedStatement in = connection.prepareStatement(insert)) {
+                        in.setString(1, itemId);
+                        in.setLong(2, bucketStart);
+                        in.setInt(3, amountDelta);
+                        in.setLong(4, now);
+                        in.executeUpdate();
+                    }
+                }
+            }
+            connection.commit();
+            connection.setAutoCommit(autoCommit);
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 原子增加压力失败", e);
+        }
+    }
+
+    @Override
+    public List<PressureBucket> loadPressureBuckets(String itemId) {
+        List<PressureBucket> list = new ArrayList<>();
+        String sql = "SELECT * FROM price_pressure WHERE item_id=? ORDER BY bucket_start ASC";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, itemId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) list.add(mapPressureBucket(rs));
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 加载压力桶失败", e);
+        }
+        return list;
+    }
+
+    @Override
+    public Map<String, List<PressureBucket>> loadAllPressureBuckets() {
+        Map<String, List<PressureBucket>> map = new LinkedHashMap<>();
+        String sql = "SELECT * FROM price_pressure ORDER BY item_id, bucket_start ASC";
+        try (Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                PressureBucket b = mapPressureBucket(rs);
+                map.computeIfAbsent(b.itemId(), k -> new ArrayList<>()).add(b);
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 加载所有压力桶失败", e);
+        }
+        return map;
+    }
+
+    @Override
+    public void deleteExpiredPressureBuckets(String itemId, long cutoffTime) {
+        String sql = "DELETE FROM price_pressure WHERE item_id=? AND bucket_start<?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, itemId);
+            ps.setLong(2, cutoffTime);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 删除过期压力桶失败", e);
+        }
+    }
+
+    private PressureBucket mapPressureBucket(ResultSet rs) throws SQLException {
+        return new PressureBucket(
+                rs.getString("item_id"),
+                rs.getLong("bucket_start"),
+                rs.getInt("amount"),
+                rs.getLong("updated_at")
+        );
     }
 
     // ---- Mail ----

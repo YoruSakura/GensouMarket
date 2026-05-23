@@ -1,8 +1,14 @@
 package net.scarletphantasy.gensouMarket.gui;
 
 import net.scarletphantasy.gensouMarket.GensouMarket;
+import net.scarletphantasy.gensouMarket.config.PricingConfigResolver;
+import net.scarletphantasy.gensouMarket.config.RecyclePricingConfig;
+import net.scarletphantasy.gensouMarket.economy.EconomySnapshotService;
 import net.scarletphantasy.gensouMarket.model.RecycleItem;
-import net.scarletphantasy.gensouMarket.shop.MarketFluctuation;
+import net.scarletphantasy.gensouMarket.shop.PriceContext;
+import net.scarletphantasy.gensouMarket.shop.PriceEngine;
+import net.scarletphantasy.gensouMarket.shop.PriceResult;
+import net.scarletphantasy.gensouMarket.shop.PressureWindowManager;
 import net.scarletphantasy.gensouMarket.util.ItemNameUtil;
 import net.scarletphantasy.gensouMarket.util.MessageUtil;
 import net.kyori.adventure.text.Component;
@@ -49,11 +55,8 @@ public final class RecycleGui {
         int start = page * PAGE_SIZE;
         int end = Math.min(start + PAGE_SIZE, itemList.size());
 
-        MarketFluctuation fluctuation = plugin.getRecycleManager().getMarketFluctuation();
-        long cycleMillis = plugin.getConfigManager().getFluctuationCycleMinutes() * 60L * 1000L;
-        long now = System.currentTimeMillis();
         for (int i = start; i < end; i++) {
-            inv.setItem(i - start, buildDisplayItem(itemList.get(i), fluctuation, now, cycleMillis));
+            inv.setItem(i - start, buildDisplayItem(plugin, player, itemList.get(i)));
         }
 
         ItemStack filler = MarketGui.createMenuItem(Material.GRAY_STAINED_GLASS_PANE, " ");
@@ -71,37 +74,83 @@ public final class RecycleGui {
         startRefreshTask(plugin, player, inv, itemList, start, end);
     }
 
-    static ItemStack buildDisplayItem(RecycleItem recycleItem, MarketFluctuation fluctuation, long now, long cycleMillis) {
+    /**
+     * 构造回收价格上下文（v1.1.1）。供同包 GuiListener 锁价校验使用。
+     */
+    public static PriceContext buildRecyclePriceContext(GensouMarket plugin, RecycleItem item) {
+        long now = System.currentTimeMillis();
+        PriceEngine engine = plugin.getRecycleManager().getPriceEngine();
+        PricingConfigResolver resolver = engine.getConfigResolver();
+        RecyclePricingConfig rcfg = resolver.resolveForRecycleItem(item.getId());
+        PressureWindowManager pw = plugin.getRecycleManager().getPressureWindow();
+        int activeVolume = pw.getActiveVolume(item.getId(), rcfg, now);
+
+        EconomySnapshotService economy = plugin.getEconomySnapshotService();
+        double econRecycleMultiplier = economy != null ? economy.getRecycleMultiplier() : 1.0;
+
+        return new PriceContext(now, econRecycleMultiplier, 1.0, activeVolume,
+                item.getRecycledStock(), 0, 0);
+    }
+
+    static ItemStack buildDisplayItem(GensouMarket plugin, Player player, RecycleItem recycleItem) {
         ItemStack display = new ItemStack(recycleItem.getMaterial());
         ItemMeta meta = display.getItemMeta();
         if (meta != null) {
             meta.displayName(ItemNameUtil.getLocalizedName(recycleItem.getMaterial()));
-            meta.lore(buildLore(recycleItem, fluctuation, now, cycleMillis));
+            meta.lore(buildLore(plugin, player, recycleItem));
             display.setItemMeta(meta);
         }
         return display;
     }
 
-    private static List<Component> buildLore(RecycleItem recycleItem, MarketFluctuation fluctuation, long now, long cycleMillis) {
+    private static List<Component> buildLore(GensouMarket plugin, Player player, RecycleItem recycleItem) {
         List<Component> lore = new ArrayList<>();
         lore.add(Component.empty());
+
+        PriceContext ctx = buildRecyclePriceContext(plugin, recycleItem);
+        PriceEngine engine = plugin.getRecycleManager().getPriceEngine();
+
+        // 单价（当前 activeVolume 下的第一件单价）
+        PriceResult singleResult = engine.calculateRecyclePrice(recycleItem, ctx);
+        double currentPrice = singleResult.unitPrice();
+
         lore.add(LEGACY.deserialize("&7基准价格: &e" + MessageUtil.formatMoney(recycleItem.getBaseRecyclePrice())));
 
-        double fluc = fluctuation.calculate(recycleItem.getId(), now);
-        double currentPrice = recycleItem.getCurrentRecyclePrice(fluc);
-
-        if (recycleItem.getSnapshotPrice() <= 0 || now - recycleItem.getSnapshotTime() >= cycleMillis) {
+        // 价格趋势（基于快照）
+        if (recycleItem.getSnapshotPrice() <= 0) {
             recycleItem.setSnapshotPrice(currentPrice);
-            recycleItem.setSnapshotTime(now);
+            recycleItem.setSnapshotTime(ctx.nowMillis());
         }
         double changePercent = 0;
         if (recycleItem.getSnapshotPrice() > 0) {
             changePercent = (currentPrice - recycleItem.getSnapshotPrice()) / recycleItem.getSnapshotPrice() * 100.0;
         }
-
-        String trend = computeTrend(changePercent);
-        lore.add(LEGACY.deserialize(trend));
+        lore.add(LEGACY.deserialize(computeTrend(changePercent)));
         lore.add(LEGACY.deserialize("&7当前回收价: &e" + MessageUtil.formatMoney(currentPrice)));
+
+        // 压力信息
+        if (singleResult.pressureRatio() > 0.01) {
+            int percent = (int) (singleResult.pressureRatio() * 100);
+            lore.add(LEGACY.deserialize("&7回收压力: &c" + percent + "%"));
+        }
+
+        // 批量预览（玩家背包数量或64）
+        int available = 0;
+        for (ItemStack item : player.getInventory().getContents()) {
+            if (item != null && item.getType() == recycleItem.getMaterial()) {
+                available += item.getAmount();
+            }
+        }
+        int batchAmount = Math.min(64, available);
+        if (batchAmount > 0) {
+            PriceResult batchResult = engine.calculateBatchRecyclePrice(recycleItem, ctx, batchAmount);
+            lore.add(LEGACY.deserialize("&7一组(" + batchAmount + ")预计: &e" + MessageUtil.formatMoney(batchResult.totalPrice())
+                    + " &7(均&e" + MessageUtil.formatMoney(batchResult.averagePrice()) + "&7)"));
+        } else {
+            lore.add(LEGACY.deserialize("&7一组(0)预计: &e" + MessageUtil.formatMoney(0)
+                    + " &7(均&e" + MessageUtil.formatMoney(0) + "&7)"));
+        }
+
         lore.add(Component.empty());
         lore.add(LEGACY.deserialize("&e左键 &7回收1个"));
         lore.add(LEGACY.deserialize("&e右键 &7回收1组"));
@@ -128,9 +177,6 @@ public final class RecycleGui {
                 return;
             }
 
-            MarketFluctuation fluctuation = plugin.getRecycleManager().getMarketFluctuation();
-            long cyclMs = plugin.getConfigManager().getFluctuationCycleMinutes() * 60L * 1000L;
-            long now = System.currentTimeMillis();
             for (int i = start; i < end; i++) {
                 int slot = i - start;
                 ItemStack existing = inv.getItem(slot);
@@ -138,7 +184,7 @@ public final class RecycleGui {
 
                 ItemMeta meta = existing.getItemMeta();
                 if (meta != null) {
-                    meta.lore(buildLore(itemList.get(i), fluctuation, now, cyclMs));
+                    meta.lore(buildLore(plugin, player, itemList.get(i)));
                     existing.setItemMeta(meta);
                 }
             }

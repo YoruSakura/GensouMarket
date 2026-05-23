@@ -3,6 +3,7 @@ package net.scarletphantasy.gensouMarket.storage;
 import net.scarletphantasy.gensouMarket.model.Auction;
 import net.scarletphantasy.gensouMarket.model.MailEntry;
 import net.scarletphantasy.gensouMarket.model.MarketListing;
+import net.scarletphantasy.gensouMarket.model.PressureBucket;
 import net.scarletphantasy.gensouMarket.model.RecycleItem;
 import net.scarletphantasy.gensouMarket.model.ShopItem;
 
@@ -74,6 +75,38 @@ public interface StorageProvider {
     void saveRecycleData(RecycleItem item);
     void saveAllRecycleData(Map<String, RecycleItem> items);
     Map<String, RecycleItem> loadRecycleData();
+
+    // ---- Pressure Data (v1.1.1) ----
+
+    /**
+     * 保存或更新一个压力桶。如果 (item_id, bucket_start) 已存在则覆盖 amount 和 updated_at。
+     */
+    void savePressureBucket(PressureBucket bucket);
+
+    /**
+     * 批量保存压力桶（全量覆盖指定物品的所有桶）。
+     */
+    void saveAllPressureBuckets(String itemId, List<PressureBucket> buckets);
+
+    /**
+     * 原子增加压力桶的数量（增量更新，防止并发覆盖）。
+     */
+    void addPressureAmount(String itemId, long bucketStart, int amountDelta, long now);
+
+    /**
+     * 加载指定物品的所有压力桶。
+     */
+    List<PressureBucket> loadPressureBuckets(String itemId);
+
+    /**
+     * 加载所有物品的所有压力桶，按 item_id 分组。
+     */
+    Map<String, List<PressureBucket>> loadAllPressureBuckets();
+
+    /**
+     * 删除指定物品在 cutoffTime 之前的过期桶。
+     */
+    void deleteExpiredPressureBuckets(String itemId, long cutoffTime);
 
     // ---- Mail ----
     int saveMail(MailEntry entry);
