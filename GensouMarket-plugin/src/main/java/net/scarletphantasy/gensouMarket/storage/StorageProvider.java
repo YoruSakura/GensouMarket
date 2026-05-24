@@ -76,6 +76,44 @@ public interface StorageProvider {
     void saveAllRecycleData(Map<String, RecycleItem> items);
     Map<String, RecycleItem> loadRecycleData();
 
+    // ---- v1.1.2 Recycle Stock Atomic Operations ----
+
+    /**
+     * 原子增量更新回流库存。跨服模式下 MySQL 使用 GREATEST(0, recycled_stock + delta)。
+     * <p>
+     * recycledStockDelta 可以为负（购买扣减），totalRecycledDelta 购买时必须为 0。
+     *
+     * @return true 表示更新成功，false 表示 SQL 异常或记录不存在
+     */
+    boolean addRecycleStockDelta(RecycleItem item,
+                                 int recycledStockDelta,
+                                 int totalRecycledDelta,
+                                 long now);
+
+    /**
+     * 条件扣减回流库存。只有当 recycled_stock >= amount 时才扣减。
+     * <p>
+     * 跨服模式下 MySQL 使用 WHERE recycled_stock >= ? 防止超卖。
+     *
+     * @param item   回收物品
+     * @param amount 扣减数量，必须 > 0
+     * @param now    当前时间戳
+     * @return true 表示扣减成功（库存充足），false 表示库存不足或异常
+     */
+    boolean consumeRecycleStockIfEnough(RecycleItem item,
+                                        int amount,
+                                        long now);
+
+    /**
+     * 只保存定义类字段（material, base_recycle_price），不覆盖运行时库存字段。
+     */
+    void saveRecycleDefinitionData(RecycleItem item);
+
+    /**
+     * 批量保存定义类字段，不覆盖运行时库存字段。
+     */
+    void saveAllRecycleDefinitionData(Map<String, RecycleItem> items);
+
     // ---- Pressure Data (v1.1.1) ----
 
     /**

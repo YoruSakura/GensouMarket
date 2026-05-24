@@ -157,6 +157,22 @@ public class MySQLStorage implements StorageProvider {
         }
     }
 
+    /**
+     * v1.1.2 仅初始化连接池，不执行表创建和迁移。供 UpgradeManager 在 storage.initialize() 前获取连接。
+     */
+    public void initDataSource() {
+        if (dataSource == null || dataSource.isClosed()) {
+            dataSource = new HikariDataSource(createHikariConfig());
+        }
+    }
+
+    /**
+     * v1.1.2 获取底层数据源。仅供 UpgradeManager 使用。
+     */
+    public HikariDataSource getDataSource() {
+        return dataSource;
+    }
+
     @Override
     public void shutdown() {
         if (dataSource != null && !dataSource.isClosed()) {
@@ -650,6 +666,133 @@ public class MySQLStorage implements StorageProvider {
             logThrottled("[MySQL] 加载回收数据失败", e);
         }
         return map;
+    }
+
+    // ---- v1.1.2 Recycle Stock Atomic Operations ----
+
+    @Override
+    public boolean addRecycleStockDelta(RecycleItem item,
+                                         int recycledStockDelta,
+                                         int totalRecycledDelta,
+                                         long now) {
+        // 1. 确保记录存在（只更新定义字段，不覆盖运行时字段）
+        String ensureSql = "INSERT INTO recycle_data" +
+                " (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock)" +
+                " VALUES (?, ?, ?, 0, 1.0, ?, 0)" +
+                " ON DUPLICATE KEY UPDATE" +
+                " material = VALUES(material)," +
+                " base_recycle_price = VALUES(base_recycle_price)";
+        // 2. 增量更新运行时字段
+        String deltaSql = "UPDATE recycle_data SET" +
+                " recycled_stock = GREATEST(0, recycled_stock + ?)," +
+                " total_recycled = GREATEST(0, total_recycled + ?)," +
+                " last_update = ?" +
+                " WHERE item_id = ?";
+        try (Connection conn = getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(ensureSql)) {
+                ps.setString(1, item.getId());
+                ps.setString(2, item.getMaterial().name());
+                ps.setDouble(3, item.getBaseRecyclePrice());
+                ps.setLong(4, now);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = conn.prepareStatement(deltaSql)) {
+                ps.setInt(1, recycledStockDelta);
+                ps.setInt(2, totalRecycledDelta);
+                ps.setLong(3, now);
+                ps.setString(4, item.getId());
+                ps.executeUpdate();
+            }
+            return true;
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[MySQL] 更新回流库存增量失败 item=" + item.getId()
+                    + " stockDelta=" + recycledStockDelta + " totalDelta=" + totalRecycledDelta, e);
+            return false;
+        }
+    }
+
+    @Override
+    public boolean consumeRecycleStockIfEnough(RecycleItem item, int amount, long now) {
+        if (amount <= 0) return false;
+
+        // 1. 确保记录存在
+        String ensureSql = "INSERT INTO recycle_data" +
+                " (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock)" +
+                " VALUES (?, ?, ?, 0, 1.0, ?, 0)" +
+                " ON DUPLICATE KEY UPDATE" +
+                " material = VALUES(material)," +
+                " base_recycle_price = VALUES(base_recycle_price)";
+        // 2. 条件扣减：只有库存充足才执行
+        String consumeSql = "UPDATE recycle_data SET" +
+                " recycled_stock = recycled_stock - ?," +
+                " last_update = ?" +
+                " WHERE item_id = ? AND recycled_stock >= ?";
+        try (Connection conn = getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(ensureSql)) {
+                ps.setString(1, item.getId());
+                ps.setString(2, item.getMaterial().name());
+                ps.setDouble(3, item.getBaseRecyclePrice());
+                ps.setLong(4, now);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = conn.prepareStatement(consumeSql)) {
+                ps.setInt(1, amount);
+                ps.setLong(2, now);
+                ps.setString(3, item.getId());
+                ps.setInt(4, amount);
+                return ps.executeUpdate() == 1;
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[MySQL] 条件扣减回流库存失败 item=" + item.getId()
+                    + " amount=" + amount, e);
+            return false;
+        }
+    }
+
+    @Override
+    public void saveRecycleDefinitionData(RecycleItem item) {
+        String sql = "INSERT INTO recycle_data" +
+                " (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock)" +
+                " VALUES (?, ?, ?, 0, 1.0, ?, 0)" +
+                " ON DUPLICATE KEY UPDATE" +
+                " material = VALUES(material)," +
+                " base_recycle_price = VALUES(base_recycle_price)," +
+                " recycle_multiplier = 1.0";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, item.getId());
+            ps.setString(2, item.getMaterial().name());
+            ps.setDouble(3, item.getBaseRecyclePrice());
+            ps.setLong(4, System.currentTimeMillis());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 保存回收定义数据失败", e);
+        }
+    }
+
+    @Override
+    public void saveAllRecycleDefinitionData(Map<String, RecycleItem> items) {
+        String sql = "INSERT INTO recycle_data" +
+                " (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock)" +
+                " VALUES (?, ?, ?, 0, 1.0, ?, 0)" +
+                " ON DUPLICATE KEY UPDATE" +
+                " material = VALUES(material)," +
+                " base_recycle_price = VALUES(base_recycle_price)," +
+                " recycle_multiplier = 1.0";
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            long now = System.currentTimeMillis();
+            for (RecycleItem item : items.values()) {
+                ps.setString(1, item.getId());
+                ps.setString(2, item.getMaterial().name());
+                ps.setDouble(3, item.getBaseRecyclePrice());
+                ps.setLong(4, now);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 批量保存回收定义数据失败", e);
+        }
     }
 
     // ---- Pressure Data (v1.1.1) ----

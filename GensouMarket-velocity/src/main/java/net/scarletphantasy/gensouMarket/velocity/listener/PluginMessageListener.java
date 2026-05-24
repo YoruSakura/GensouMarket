@@ -74,7 +74,8 @@ public class PluginMessageListener {
                  MAIL_CREATED,
                  REFRESH_MARKET_VIEW,
                  REFRESH_AUCTION_VIEW,
-                 PRESSURE_SYNC -> handleBroadcast(packet);
+                 PRESSURE_SYNC,
+                 RECYCLE_STOCK_SYNC -> handleBroadcast(packet);
 
             // 定向投递类：根据目标玩家路由到所在后端
             case PLAYER_NOTIFY,

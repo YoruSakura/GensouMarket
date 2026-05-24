@@ -36,7 +36,10 @@ public enum PacketType {
     REQUEST_FAIL((byte) 0x61),
 
     // v1.1.1 价格压力同步
-    PRESSURE_SYNC((byte) 0x70);
+    PRESSURE_SYNC((byte) 0x70),
+
+    // v1.1.2 跨服回流库存同步
+    RECYCLE_STOCK_SYNC((byte) 0x71);
 
     private final byte id;
 

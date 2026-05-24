@@ -72,7 +72,11 @@ public class RecycleManager {
     }
 
     public void saveAllData() {
-        storage.saveAllRecycleData(recycleItems);
+        if (plugin.isClusterEnabled()) {
+            storage.saveAllRecycleDefinitionData(recycleItems);
+        } else {
+            storage.saveAllRecycleData(recycleItems);
+        }
     }
 
     public Map<String, RecycleItem> getRecycleItems() {
@@ -157,26 +161,63 @@ public class RecycleManager {
         // 6. 移除玩家物品
         removeMaterial(player, material, amount);
 
-        // 7. 写入压力窗口（入账和移除成功后才写入）
-        int newActiveVolume = pressureWindow.recordRecycle(recycleItem.getId(), pricingConfig, amount, now);
-
-        // 7.5. 跨服压力同步（Velocity）
+        // ---- v1.1.2 跨服/非跨服分支 ----
         if (plugin.isClusterEnabled()) {
+            // 跨服模式：先写 MySQL 原子增量
+            final int finalAmount = amount;
+            boolean dbSuccess = storage.addRecycleStockDelta(recycleItem, finalAmount, finalAmount, now);
+            if (!dbSuccess) {
+                // MySQL 写入失败：补偿 — 扣回金额并返还物品
+                plugin.getLogger().severe("[Recycle] MySQL 库存增量写入失败，尝试补偿！" +
+                        " player=" + player.getUniqueId() + " item=" + recycleItem.getId() +
+                        " amount=" + finalAmount + " earning=" + totalEarning);
+                if (!vault.withdraw(player, totalEarning)) {
+                    plugin.getLogger().severe("[Recycle] 补偿扣款失败！player=" + player.getUniqueId() +
+                            " amount=" + totalEarning);
+                }
+                ItemStack returnItem = new ItemStack(material, finalAmount);
+                java.util.HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(returnItem);
+                if (!overflow.isEmpty()) {
+                    for (ItemStack drop : overflow.values()) {
+                        player.getWorld().dropItemNaturally(player.getLocation(), drop);
+                    }
+                }
+                MessageUtil.send(player, "&c回收操作失败，物品和金额已返还！");
+                return false;
+            }
+
+            // MySQL 成功：合并本地内存
+            recycleItem.addRecycled(finalAmount);
+            recycleItem.addRecycledStock(finalAmount);
+            recycleItem.setLastUpdate(now);
+
+            // 写入压力窗口（库存增量成功后才写入）
+            int newActiveVolume = pressureWindow.recordRecycle(recycleItem.getId(), pricingConfig, finalAmount, now);
+
+            // 跨服压力同步
             long bucketMillis = pricingConfig.bucketSeconds() * 1000L;
             if (bucketMillis <= 0) bucketMillis = 60_000L;
             long bucketStart = (now / bucketMillis) * bucketMillis;
             plugin.getClusterEventPublisher().publishPressureSync(
-                    recycleItem.getId(), bucketStart, amount, newActiveVolume, now);
+                    recycleItem.getId(), bucketStart, finalAmount, newActiveVolume, now);
+
+            // 跨服库存同步
+            plugin.getClusterEventPublisher().publishRecycleStockSync(
+                    recycleItem.getId(), finalAmount, finalAmount, now, "recycle");
+        } else {
+            // 非跨服模式：按原本本地保存路径处理
+
+            // 7. 写入压力窗口（入账和移除成功后才写入）
+            pressureWindow.recordRecycle(recycleItem.getId(), pricingConfig, amount, now);
+
+            // 8. 增加 totalRecycled 和 recycledStock
+            recycleItem.addRecycled(amount);
+            recycleItem.addRecycledStock(amount);
+            recycleItem.setLastUpdate(now);
+
+            // 9. 立即保存回收数据
+            storage.saveRecycleData(recycleItem);
         }
-
-        // 8. 增加 totalRecycled 和 recycledStock
-        recycleItem.addRecycled(amount);
-        recycleItem.addRecycledStock(amount);
-        recycleItem.setLastUpdate(now);
-
-        // 9. 立即保存回收数据。回流库存是关键库存状态，必须在操作成功返回前落库，
-        // 避免玩家回收后立刻 reload / restart 时库存回退。
-        storage.saveRecycleData(recycleItem);
 
         // 发送消息
         MessageUtil.send(player, Component.text("成功回收 ", NamedTextColor.GREEN)
@@ -231,12 +272,80 @@ public class RecycleManager {
         return pressureWindow;
     }
 
+    /**
+     * v1.1.2 接收远程回流库存增量并合并到本地内存。
+     * <p>
+     * 只修改本地内存，不写 MySQL，不自动创建 RecycleItem。
+     * 本方法必须在主线程调用。
+     *
+     * @param itemId              物品 ID
+     * @param recycledStockDelta  回流库存增量（正=回收，负=购买）
+     * @param totalRecycledDelta  累计回收量增量（正=回收，0=购买）
+     * @param eventTime           事件发生时间毫秒
+     */
+    public void applyRemoteRecycleStockDelta(String itemId,
+                                              int recycledStockDelta,
+                                              int totalRecycledDelta,
+                                              long eventTime) {
+        RecycleItem item = recycleItems.get(itemId);
+        if (item == null) {
+            // 本地不存在该物品，忽略事件，不自动创建
+            plugin.getLogger().fine("[RecycleStockSync] 本地不存在 itemId=" + itemId + "，忽略远程库存事件");
+            return;
+        }
+
+        // 合并规则：recycledStock = max(0, recycledStock + delta)
+        int newStock = Math.max(0, item.getRecycledStock() + recycledStockDelta);
+        item.setRecycledStock(newStock);
+
+        // 合并规则：totalRecycled = max(0, totalRecycled + delta)
+        int newTotal = Math.max(0, item.getTotalRecycled() + totalRecycledDelta);
+        item.setTotalRecycled(newTotal);
+
+        // 合并规则：lastUpdate = max(lastUpdate, eventTime)
+        if (eventTime > item.getLastUpdate()) {
+            item.setLastUpdate(eventTime);
+        }
+    }
+
+    /**
+     * v1.1.2 定期从 MySQL 校准本地回流库存运行时字段。
+     * <p>
+     * 异步从 MySQL 读取 recycle_data，回主线程合并到本地已配置的 RecycleItem。
+     * 只覆盖已配置的本地 itemId，不自动创建配置外物品。
+     * 校准使用 MySQL 绝对值覆盖本地运行时字段。
+     */
+    public void scheduleRecycleRuntimeCalibration() {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            Map<String, RecycleItem> dbData = storage.loadRecycleData();
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                for (Map.Entry<String, RecycleItem> entry : recycleItems.entrySet()) {
+                    String id = entry.getKey();
+                    RecycleItem local = entry.getValue();
+                    RecycleItem db = dbData.get(id);
+                    if (db == null) continue;
+                    // 用 MySQL 绝对值覆盖运行时字段
+                    local.setRecycledStock(db.getRecycledStock());
+                    local.setTotalRecycled(db.getTotalRecycled());
+                    local.setLastUpdate(db.getLastUpdate());
+                }
+                plugin.getLogger().fine("[Cluster] 回流库存定期校准完成");
+            });
+        });
+    }
+
     public boolean addItem(String id, Material material, double recyclePrice) {
         if (recycleItems.containsKey(id)) return false;
         RecycleItem item = new RecycleItem(id, material, recyclePrice);
         recycleItems.put(id, item);
         config.saveRecycleItem(id, material, recyclePrice);
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveRecycleData(item));
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            if (plugin.isClusterEnabled()) {
+                storage.saveRecycleDefinitionData(item);
+            } else {
+                storage.saveRecycleData(item);
+            }
+        });
         return true;
     }
 
@@ -252,7 +361,13 @@ public class RecycleManager {
         if (item == null) return false;
         item.setBaseRecyclePrice(recyclePrice);
         config.saveRecycleItem(id, item.getMaterial(), recyclePrice);
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveRecycleData(item));
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            if (plugin.isClusterEnabled()) {
+                storage.saveRecycleDefinitionData(item);
+            } else {
+                storage.saveRecycleData(item);
+            }
+        });
         return true;
     }
 }

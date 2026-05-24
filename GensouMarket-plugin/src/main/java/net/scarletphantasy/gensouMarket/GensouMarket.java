@@ -21,6 +21,7 @@ import net.scarletphantasy.gensouMarket.listener.TradeInteractListener;
 import net.scarletphantasy.gensouMarket.storage.StorageFactory;
 import net.scarletphantasy.gensouMarket.storage.StorageProvider;
 import net.scarletphantasy.gensouMarket.trade.TradeManager;
+import net.scarletphantasy.gensouMarket.upgrade.UpgradeManager;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class GensouMarket extends JavaPlugin {
@@ -51,6 +52,17 @@ public final class GensouMarket extends JavaPlugin {
         configManager = new ConfigManager(this);
         configManager.load();
 
+        // v1.1.2 升级框架 Phase 1：配置侧版本检查
+        UpgradeManager upgradeManager = new UpgradeManager(getDataFolder(), configManager.getStorageType());
+        try {
+            upgradeManager.initConfigSide();
+        } catch (Exception e) {
+            getLogger().severe("升级框架配置侧检查失败！" + e.getMessage());
+            getLogger().log(java.util.logging.Level.SEVERE, "升级阻断", e);
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
         // 连接 Vault
         vaultHook = new VaultHook();
         if (!vaultHook.setup()) {
@@ -66,6 +78,16 @@ public final class GensouMarket extends JavaPlugin {
         // 跨服模式校验：必须使用 MySQL
         if (configManager.isClusterEnabled() && !"mysql".equalsIgnoreCase(configManager.getStorageType())) {
             getLogger().severe("跨服模式 (cluster.enabled=true) 必须使用 MySQL 存储！当前: " + configManager.getStorageType());
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
+        // v1.1.2 升级框架 Phase 2：存储侧迁移与降级阻断
+        try {
+            upgradeManager.runStorageMigration(storage);
+        } catch (Exception e) {
+            getLogger().severe("升级框架存储侧迁移失败！" + e.getMessage());
+            getLogger().log(java.util.logging.Level.SEVERE, "迁移阻断", e);
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
@@ -151,6 +173,7 @@ public final class GensouMarket extends JavaPlugin {
         }, 6000L, 6000L);
 
         // v1.1.1 定时任务：集群模式下定期从 MySQL 校准压力数据 (每3分钟，异步执行)
+        // v1.1.2 追加：同时校准回流库存运行时字段
         if (isClusterEnabled()) {
             getServer().getScheduler().runTaskTimerAsynchronously(this, () -> {
                 if (configManager.isRecycleEnabled()) {
@@ -161,6 +184,9 @@ public final class GensouMarket extends JavaPlugin {
                     }
                     recycleManager.getPressureWindow().loadAll(configMap);
                     getLogger().fine("[Cluster] 压力数据定期校准完成");
+
+                    // v1.1.2 回流库存校准
+                    recycleManager.scheduleRecycleRuntimeCalibration();
                 }
             }, 3600L, 3600L);
         }

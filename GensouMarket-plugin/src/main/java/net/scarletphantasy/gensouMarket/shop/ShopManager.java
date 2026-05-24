@@ -20,7 +20,6 @@ import org.bukkit.inventory.ItemStack;
 
 import net.scarletphantasy.gensouMarket.config.ShopPricingConfig;
 
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -173,16 +172,16 @@ public class ShopManager {
         return plugin.getRecycleManager().getRecycleItems().get(shopItem.getRecycleSourceId());
     }
 
-    public boolean buyFromShop(Player player, String itemId, int amount) {
+    public void buyFromShop(Player player, String itemId, int amount) {
         if (!config.isShopEnabled()) {
             MessageUtil.send(player, "&c服务器商店未启用！");
-            return false;
+            return;
         }
 
         ShopItem shopItem = shopItems.get(itemId);
         if (shopItem == null) {
             MessageUtil.send(player, "&c未找到该商品！");
-            return false;
+            return;
         }
 
         if (amount <= 0) amount = 1;
@@ -193,19 +192,19 @@ public class ShopManager {
             recycleSource = resolveRecycleSource(shopItem);
             if (recycleSource == null) {
                 MessageUtil.send(player, "&c该回流商品的回收来源未配置，无法购买！");
-                return false;
+                return;
             }
         }
 
-        // 先检查库存
+        // 先检查库存（本地快照只作为提前提示，不是最终购买凭证）
         int available = computeAvailableStock(shopItem);
         if (available <= 0) {
             MessageUtil.send(player, "&c该商品已缺货！");
-            return false;
+            return;
         }
         if (available < amount) {
             MessageUtil.send(player, "&c库存不足，当前剩余 &e" + available + "&c 个！");
-            return false;
+            return;
         }
 
         // v1.1.1 统一价格计算
@@ -215,16 +214,23 @@ public class ShopManager {
 
         if (!vault.has(player, totalCost)) {
             MessageUtil.send(player, "&c你没有足够的金币！需要: &e" + MessageUtil.formatMoney(totalCost));
-            return false;
+            return;
         }
 
+        // ---- v1.1.2 跨服 recycled 购买分支 ----
+        if (shopItem.isRecycled() && plugin.isClusterEnabled() && recycleSource != null) {
+            buyRecycledCluster(player, shopItem, recycleSource, amount, pricePerUnit, totalCost);
+            return;
+        }
+
+        // 非跨服或非 recycled：同步流程
         if (!vault.withdraw(player, totalCost)) {
             MessageUtil.send(player, "&c扣款失败，请稍后重试购买！");
-            return false;
+            return;
         }
 
         ItemStack item = new ItemStack(shopItem.getMaterial(), amount);
-        HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(item);
+        java.util.HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(item);
         if (!overflow.isEmpty()) {
             for (ItemStack drop : overflow.values()) {
                 player.getWorld().dropItemNaturally(player.getLocation(), drop);
@@ -239,10 +245,10 @@ public class ShopManager {
             shopItem.setLastUpdate(System.currentTimeMillis());
             storage.saveShopData(shopItem);
         } else if (shopItem.isRecycled() && recycleSource != null) {
+            // 非跨服 recycled——本地保存
             recycleSource.setRecycledStock(Math.max(recycleSource.getRecycledStock() - amount, 0));
             recycleSource.setLastUpdate(System.currentTimeMillis());
             storage.saveRecycleData(recycleSource);
-            // 同时更新 shop 端 totalBought
             storage.saveShopData(shopItem);
         } else {
             // fixed+unlimited 只更新 totalBought
@@ -257,7 +263,81 @@ public class ShopManager {
                 .append(Component.text(" (单价: ", NamedTextColor.GREEN))
                 .append(Component.text(MessageUtil.formatMoney(pricePerUnit), NamedTextColor.YELLOW))
                 .append(Component.text(")", NamedTextColor.GREEN)));
-        return true;
+    }
+
+    /**
+     * v1.1.2 跨服 recycled 商品购买流程。
+     * <p>
+     * 使用 MySQL 条件扣减避免超卖，成功后回主线程交付物品。
+     */
+    private void buyRecycledCluster(Player player, ShopItem shopItem, RecycleItem recycleSource,
+                                     int amount, double pricePerUnit, double totalCost) {
+        final long now = System.currentTimeMillis();
+
+        // 异步执行 MySQL 条件扣减
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            boolean consumed = storage.consumeRecycleStockIfEnough(recycleSource, amount, now);
+            // 回主线程处理结果
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!consumed) {
+                    MessageUtil.send(player, "&c库存不足或已被其他服务器抢购，请稍后重试！");
+                    return;
+                }
+
+                // MySQL 扣减成功，再次确认玩家状态
+                if (!player.isOnline()) {
+                    // 玩家离线，异步补偿库存
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () ->
+                            storage.addRecycleStockDelta(recycleSource, amount, 0, System.currentTimeMillis()));
+                    return;
+                }
+
+                if (!vault.has(player, totalCost)) {
+                    // 余额不足，异步补偿库存
+                    MessageUtil.send(player, "&c余额不足，购买已取消！");
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () ->
+                            storage.addRecycleStockDelta(recycleSource, amount, 0, System.currentTimeMillis()));
+                    return;
+                }
+
+                if (!vault.withdraw(player, totalCost)) {
+                    // 扣款失败，异步补偿库存
+                    MessageUtil.send(player, "&c扣款失败，购买已取消！");
+                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () ->
+                            storage.addRecycleStockDelta(recycleSource, amount, 0, System.currentTimeMillis()));
+                    return;
+                }
+
+                // 扣款成功：发放物品
+                ItemStack item = new ItemStack(shopItem.getMaterial(), amount);
+                java.util.HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(item);
+                if (!overflow.isEmpty()) {
+                    for (ItemStack drop : overflow.values()) {
+                        player.getWorld().dropItemNaturally(player.getLocation(), drop);
+                    }
+                    MessageUtil.send(player, "&e背包已满，物品已掉落在你脚下！");
+                }
+
+                // 更新本地内存
+                recycleSource.setRecycledStock(Math.max(recycleSource.getRecycledStock() - amount, 0));
+                recycleSource.setLastUpdate(now);
+                shopItem.addBought(amount);
+                storage.saveShopData(shopItem);
+
+                // 跨服库存同步：广播负增量给其他子服
+                plugin.getClusterEventPublisher().publishRecycleStockSync(
+                        recycleSource.getId(), -amount, 0, now, "shop-buy");
+
+                MessageUtil.send(player, Component.text("成功购买 ", NamedTextColor.GREEN)
+                        .append(Component.text(amount + "x ", NamedTextColor.YELLOW))
+                        .append(ItemNameUtil.getLocalizedName(shopItem.getMaterial()).color(NamedTextColor.YELLOW))
+                        .append(Component.text(" 花费: ", NamedTextColor.GREEN))
+                        .append(Component.text(MessageUtil.formatMoney(totalCost), NamedTextColor.YELLOW))
+                        .append(Component.text(" (单价: ", NamedTextColor.GREEN))
+                        .append(Component.text(MessageUtil.formatMoney(pricePerUnit), NamedTextColor.YELLOW))
+                        .append(Component.text(")", NamedTextColor.GREEN)));
+            });
+        });
     }
 
     public boolean addItem(String id, Material material, double buyPrice) {

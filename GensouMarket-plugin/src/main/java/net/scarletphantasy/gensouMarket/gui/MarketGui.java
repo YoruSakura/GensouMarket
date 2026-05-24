@@ -51,7 +51,7 @@ public final class MarketGui {
         }
         if (cm.isShopEnabled()) {
             inv.setItem(14, createMenuItem(Material.EMERALD,
-                    "&a&l服务器商店", "&7从服务器购买物品", "&7价格固定", "&7点击打开"));
+                    "&a&l服务器商店", "&7购买服务器提供的商品", "&7部分商品价格会随库存或市场状态变化", "&7点击打开"));
         }
         if (cm.isRecycleEnabled()) {
             inv.setItem(16, createMenuItem(Material.HOPPER,

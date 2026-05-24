@@ -188,6 +188,32 @@ public class ClusterEventPublisher {
         bridge.send(packet);
     }
 
+    // ========== v1.1.2 跨服回流库存同步 ==========
+
+    /**
+     * 回收或购买 recycled 商品后，广播库存增量到其他子服。
+     *
+     * @param itemId              回收物品 ID
+     * @param recycledStockDelta  回流库存增量（回收为正，购买为负）
+     * @param totalRecycledDelta  累计回收量增量（回收为正，购买为 0）
+     * @param eventTimeMillis     事件发生时间
+     * @param sourceAction        来源动作（recycle / shop-buy）
+     */
+    public void publishRecycleStockSync(String itemId,
+                                        int recycledStockDelta,
+                                        int totalRecycledDelta,
+                                        long eventTimeMillis,
+                                        String sourceAction) {
+        OutgoingPacket packet = newPacket(PacketType.RECYCLE_STOCK_SYNC);
+        packet.put("eventId", UUID.randomUUID().toString());
+        packet.put("itemId", itemId);
+        packet.put("recycledStockDelta", String.valueOf(recycledStockDelta));
+        packet.put("totalRecycledDelta", String.valueOf(totalRecycledDelta));
+        packet.put("eventTime", String.valueOf(eventTimeMillis));
+        packet.put("sourceAction", sourceAction);
+        bridge.send(packet);
+    }
+
     private OutgoingPacket newPacket(PacketType type) {
         return new OutgoingPacket(type, bridge.newRequestId(), bridge.getServerId());
     }

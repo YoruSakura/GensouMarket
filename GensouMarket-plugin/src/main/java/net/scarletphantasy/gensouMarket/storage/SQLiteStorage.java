@@ -565,6 +565,155 @@ public class SQLiteStorage implements StorageProvider {
         return map;
     }
 
+    // ---- v1.1.2 Recycle Stock Atomic Operations ----
+
+    @Override
+    public boolean addRecycleStockDelta(RecycleItem item,
+                                         int recycledStockDelta,
+                                         int totalRecycledDelta,
+                                         long now) {
+        // SQLite: 先确保记录存在，再增量更新
+        String ensureSql = "INSERT OR IGNORE INTO recycle_data" +
+                " (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock)" +
+                " VALUES (?, ?, ?, 0, 1.0, ?, 0)";
+        String deltaSql = "UPDATE recycle_data SET" +
+                " recycled_stock = MAX(0, recycled_stock + ?)," +
+                " total_recycled = MAX(0, total_recycled + ?)," +
+                " last_update = ?" +
+                " WHERE item_id = ?";
+        try {
+            try (PreparedStatement ps = connection.prepareStatement(ensureSql)) {
+                ps.setString(1, item.getId());
+                ps.setString(2, item.getMaterial().name());
+                ps.setDouble(3, item.getBaseRecyclePrice());
+                ps.setLong(4, now);
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = connection.prepareStatement(deltaSql)) {
+                ps.setInt(1, recycledStockDelta);
+                ps.setInt(2, totalRecycledDelta);
+                ps.setLong(3, now);
+                ps.setString(4, item.getId());
+                ps.executeUpdate();
+            }
+            return true;
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 更新回流库存增量失败 item=" + item.getId()
+                    + " stockDelta=" + recycledStockDelta + " totalDelta=" + totalRecycledDelta, e);
+            return false;
+        }
+    }
+
+    @Override
+    public synchronized boolean consumeRecycleStockIfEnough(RecycleItem item, int amount, long now) {
+        if (amount <= 0) return false;
+
+        String ensureSql = "INSERT OR IGNORE INTO recycle_data" +
+                " (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock)" +
+                " VALUES (?, ?, ?, 0, 1.0, ?, 0)";
+        String consumeSql = "UPDATE recycle_data SET" +
+                " recycled_stock = recycled_stock - ?," +
+                " last_update = ?" +
+                " WHERE item_id = ? AND recycled_stock >= ?";
+        try {
+            boolean autoCommit = connection.getAutoCommit();
+            connection.setAutoCommit(false);
+            try {
+                try (PreparedStatement ps = connection.prepareStatement(ensureSql)) {
+                    ps.setString(1, item.getId());
+                    ps.setString(2, item.getMaterial().name());
+                    ps.setDouble(3, item.getBaseRecyclePrice());
+                    ps.setLong(4, now);
+                    ps.executeUpdate();
+                }
+                try (PreparedStatement ps = connection.prepareStatement(consumeSql)) {
+                    ps.setInt(1, amount);
+                    ps.setLong(2, now);
+                    ps.setString(3, item.getId());
+                    ps.setInt(4, amount);
+                    boolean success = ps.executeUpdate() == 1;
+                    connection.commit();
+                    return success;
+                }
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(autoCommit);
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 条件扣减回流库存失败 item=" + item.getId()
+                    + " amount=" + amount, e);
+            return false;
+        }
+    }
+
+    @Override
+    public void saveRecycleDefinitionData(RecycleItem item) {
+        // 先确保记录存在（不覆盖已有运行时数据），再只更新定义字段
+        String ensureSql = "INSERT OR IGNORE INTO recycle_data" +
+                " (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock)" +
+                " VALUES (?, ?, ?, 0, 1.0, ?, 0)";
+        String updateSql = "UPDATE recycle_data SET" +
+                " material = ?," +
+                " base_recycle_price = ?," +
+                " recycle_multiplier = 1.0" +
+                " WHERE item_id = ?";
+        try {
+            try (PreparedStatement ps = connection.prepareStatement(ensureSql)) {
+                ps.setString(1, item.getId());
+                ps.setString(2, item.getMaterial().name());
+                ps.setDouble(3, item.getBaseRecyclePrice());
+                ps.setLong(4, System.currentTimeMillis());
+                ps.executeUpdate();
+            }
+            try (PreparedStatement ps = connection.prepareStatement(updateSql)) {
+                ps.setString(1, item.getMaterial().name());
+                ps.setDouble(2, item.getBaseRecyclePrice());
+                ps.setString(3, item.getId());
+                ps.executeUpdate();
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 保存回收定义数据失败", e);
+        }
+    }
+
+    @Override
+    public void saveAllRecycleDefinitionData(Map<String, RecycleItem> items) {
+        String ensureSql = "INSERT OR IGNORE INTO recycle_data" +
+                " (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock)" +
+                " VALUES (?, ?, ?, 0, 1.0, ?, 0)";
+        String updateSql = "UPDATE recycle_data SET" +
+                " material = ?," +
+                " base_recycle_price = ?," +
+                " recycle_multiplier = 1.0" +
+                " WHERE item_id = ?";
+        try {
+            long now = System.currentTimeMillis();
+            try (PreparedStatement ips = connection.prepareStatement(ensureSql)) {
+                for (RecycleItem item : items.values()) {
+                    ips.setString(1, item.getId());
+                    ips.setString(2, item.getMaterial().name());
+                    ips.setDouble(3, item.getBaseRecyclePrice());
+                    ips.setLong(4, now);
+                    ips.addBatch();
+                }
+                ips.executeBatch();
+            }
+            try (PreparedStatement ups = connection.prepareStatement(updateSql)) {
+                for (RecycleItem item : items.values()) {
+                    ups.setString(1, item.getMaterial().name());
+                    ups.setDouble(2, item.getBaseRecyclePrice());
+                    ups.setString(3, item.getId());
+                    ups.addBatch();
+                }
+                ups.executeBatch();
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 批量保存回收定义数据失败", e);
+        }
+    }
+
     // ---- Pressure Data (v1.1.1) ----
 
     @Override

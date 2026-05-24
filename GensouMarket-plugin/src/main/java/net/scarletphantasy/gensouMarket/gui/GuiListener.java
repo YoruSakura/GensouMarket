@@ -607,6 +607,16 @@ public class GuiListener implements Listener {
                     plugin.getShopManager().buyFromShop(player, shopItem.getId(), amount);
                     ShopGui.openShop(plugin, player, page);
                 } else {
+                    // v1.1.2 缺货预检查：在创建确认会话前检查库存
+                    int available = plugin.getShopManager().computeAvailableStock(shopItem);
+                    if (available <= 0) {
+                        MessageUtil.send(player, "&c该商品已缺货！");
+                        return;
+                    }
+                    if (available < amount) {
+                        MessageUtil.send(player, "&c库存不足，当前剩余 &e" + available + "&c 个！");
+                        return;
+                    }
                     // 首次点击：记录价格快照
                     pendingConfirmations.put(uuid, new PendingAction(actionKey, index, now, totalCost));
                     MessageUtil.send(player, "&e再次点击确认购买 &6" + amount + "x&e，花费: &6" + MessageUtil.formatMoney(totalCost));

@@ -56,6 +56,7 @@ public class RemoteActionHandler {
             case AUCTION_CANCELLED -> { if (plugin.getConfigManager().isAuctionEnabled()) handleAuctionCancelled(packet.payload()); }
             case AUCTION_CREATED -> { if (plugin.getConfigManager().isAuctionEnabled()) handleRefreshAuctionList(); }
             case PRESSURE_SYNC -> handlePressureSync(packet.payload());
+            case RECYCLE_STOCK_SYNC -> handleRecycleStockSync(packet.payload());
             default -> plugin.getLogger().fine("忽略跨服消息类型: " + packet.type());
         }
     }
@@ -88,6 +89,52 @@ public class RemoteActionHandler {
             pressureWindow.mergeRemotePressure(itemId, bucketStart, amountDelta);
             plugin.getLogger().fine("[PressureSync] 合并远程压力: item=" + itemId
                     + " bucket=" + bucketStart + " delta=" + amountDelta);
+        });
+    }
+
+    // ========== v1.1.2 跨服回流库存同步 ==========
+
+    private void handleRecycleStockSync(Map<String, String> payload) {
+        String eventId = payload.get("eventId");
+        if (eventId != null && !eventId.isEmpty()) {
+            synchronized (processedEvents) {
+                if (processedEvents.containsKey(eventId)) {
+                    plugin.getLogger().fine("[RecycleStockSync] 忽略重复事件: " + eventId);
+                    return;
+                }
+                processedEvents.put(eventId, System.currentTimeMillis());
+            }
+        }
+
+        String itemId = payload.get("itemId");
+        if (itemId == null || itemId.isEmpty()) {
+            plugin.getLogger().warning("[RecycleStockSync] 缺少 itemId，忽略事件");
+            return;
+        }
+
+        int recycledStockDelta = parseInt(payload.get("recycledStockDelta"), 0);
+        int totalRecycledDelta = parseInt(payload.get("totalRecycledDelta"), 0);
+        if (recycledStockDelta == 0 && totalRecycledDelta == 0) {
+            return;
+        }
+
+        long eventTime = parseLong(payload.get("eventTime"), -1);
+        if (eventTime <= 0) {
+            eventTime = System.currentTimeMillis();
+        }
+
+        String sourceAction = payload.getOrDefault("sourceAction", "unknown");
+
+        final long finalEventTime = eventTime;
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            var recycleManager = plugin.getRecycleManager();
+            if (recycleManager == null) return;
+            recycleManager.applyRemoteRecycleStockDelta(
+                    itemId, recycledStockDelta, totalRecycledDelta, finalEventTime);
+            plugin.getLogger().fine("[RecycleStockSync] 合并远程库存: item=" + itemId
+                    + " stockDelta=" + recycledStockDelta
+                    + " totalDelta=" + totalRecycledDelta
+                    + " source=" + sourceAction);
         });
     }
 

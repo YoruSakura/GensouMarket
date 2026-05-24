@@ -93,27 +93,19 @@ public final class ShopGui {
         String priceStr = MessageUtil.formatMoney(price);
 
         if (shopItem.isFixedUnlimited()) {
-            boolean isDynamic = result.cycleMultiplier() != 1.0 || result.economyMultiplier() != 1.0;
-            String tag = isDynamic ? " &7(动态)" : " &7(固定)";
-            lore.add(LEGACY.deserialize("&a购买价格: &e" + priceStr + tag));
+            lore.add(LEGACY.deserialize("&a购买价格: &e" + priceStr));
             lore.add(LEGACY.deserialize("&7库存: &f无限"));
-            if (isDynamic) {
-                addDynamicIndicators(lore, result);
-            }
+            lore.add(LEGACY.deserialize("&7售价来源: &f基础价格"));
         } else if (shopItem.isFixedLimited()) {
-            boolean isDynamic = result.stockMultiplier() != 1.0 || result.cycleMultiplier() != 1.0;
-            String tag = isDynamic ? " &7(动态)" : " &7(固定)";
-            lore.add(LEGACY.deserialize("&a购买价格: &e" + priceStr + tag));
+            lore.add(LEGACY.deserialize("&a购买价格: &e" + priceStr));
             if (outOfStock) {
                 lore.add(LEGACY.deserialize("&7库存: &c0 (缺货)"));
             } else {
                 lore.add(LEGACY.deserialize("&7库存: &f" + stock));
             }
-            if (isDynamic) {
-                addDynamicIndicators(lore, result);
-            }
+            lore.add(LEGACY.deserialize("&7售价来源: &f库存"));
         } else if (shopItem.isRecycled()) {
-            lore.add(LEGACY.deserialize("&a当前售价: &e" + priceStr + " &7(动态)"));
+            lore.add(LEGACY.deserialize("&a当前售价: &e" + priceStr));
             RecycleItem source = shopManager.resolveRecycleSource(shopItem);
             String sourceName = source != null ? source.getId() : "?";
             lore.add(LEGACY.deserialize("&7回流来源: &f" + sourceName));
@@ -122,30 +114,8 @@ public final class ShopGui {
             } else {
                 lore.add(LEGACY.deserialize("&7回流库存: &f" + stock));
             }
-            addDynamicIndicators(lore, result);
+            lore.add(LEGACY.deserialize("&7售价来源: &f回流库存"));
         }
         return lore;
     }
-
-    /**
-     * 添加动态价格来源指示器。
-     */
-    private static void addDynamicIndicators(List<Component> lore, PriceResult result) {
-        if (result.cycleMultiplier() != 1.0) {
-            String pct = String.format("%+.1f%%", (result.cycleMultiplier() - 1.0) * 100);
-            lore.add(LEGACY.deserialize("&7  周期波动: &f" + pct));
-        }
-        if (result.economyMultiplier() != 1.0) {
-            String pct = String.format("%.2fx", result.economyMultiplier());
-            lore.add(LEGACY.deserialize("&7  经济倍率: &f" + pct));
-        }
-        if (result.stockMultiplier() != 1.0) {
-            String pct = String.format("%.2fx", result.stockMultiplier());
-            lore.add(LEGACY.deserialize("&7  库存影响: &f" + pct));
-        }
-        if (result.antiArbitrageApplied()) {
-            lore.add(LEGACY.deserialize("&c  ⚠ 防套利保护生效"));
-        }
-    }
 }
-

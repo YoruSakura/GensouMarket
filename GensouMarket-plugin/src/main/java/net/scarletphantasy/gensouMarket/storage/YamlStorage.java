@@ -440,6 +440,73 @@ public class YamlStorage implements StorageProvider {
         return map;
     }
 
+    // ---- v1.1.2 Recycle Stock Atomic Operations ----
+
+    @Override
+    public synchronized boolean addRecycleStockDelta(RecycleItem item,
+                                                      int recycledStockDelta,
+                                                      int totalRecycledDelta,
+                                                      long now) {
+        try {
+            String path = "items." + item.getId();
+            // 确保记录基本结构存在
+            if (!recycleDataConfig.contains(path + ".material")) {
+                recycleDataConfig.set(path + ".material", item.getMaterial().name());
+                recycleDataConfig.set(path + ".base-recycle-price", item.getBaseRecyclePrice());
+                recycleDataConfig.set(path + ".recycle-multiplier", 1.0);
+            }
+            int currentStock = recycleDataConfig.getInt(path + ".recycled-stock", 0);
+            int currentTotal = recycleDataConfig.getInt(path + ".total-recycled", 0);
+            recycleDataConfig.set(path + ".recycled-stock", Math.max(0, currentStock + recycledStockDelta));
+            recycleDataConfig.set(path + ".total-recycled", Math.max(0, currentTotal + totalRecycledDelta));
+            recycleDataConfig.set(path + ".last-update", now);
+            saveFile(recycleDataConfig, recycleFile);
+            return true;
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "[YAML] 更新回流库存增量失败 item=" + item.getId(), e);
+            return false;
+        }
+    }
+
+    @Override
+    public synchronized boolean consumeRecycleStockIfEnough(RecycleItem item, int amount, long now) {
+        if (amount <= 0) return false;
+        try {
+            String path = "items." + item.getId();
+            int currentStock = recycleDataConfig.getInt(path + ".recycled-stock", 0);
+            if (currentStock < amount) return false;
+            recycleDataConfig.set(path + ".recycled-stock", currentStock - amount);
+            recycleDataConfig.set(path + ".last-update", now);
+            saveFile(recycleDataConfig, recycleFile);
+            return true;
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "[YAML] 条件扣减回流库存失败 item=" + item.getId(), e);
+            return false;
+        }
+    }
+
+    @Override
+    public synchronized void saveRecycleDefinitionData(RecycleItem item) {
+        String path = "items." + item.getId();
+        recycleDataConfig.set(path + ".material", item.getMaterial().name());
+        recycleDataConfig.set(path + ".base-recycle-price", item.getBaseRecyclePrice());
+        recycleDataConfig.set(path + ".recycle-multiplier", 1.0);
+        // 不覆盖运行时字段：total-recycled, recycled-stock, last-update
+        saveFile(recycleDataConfig, recycleFile);
+    }
+
+    @Override
+    public synchronized void saveAllRecycleDefinitionData(Map<String, RecycleItem> items) {
+        for (RecycleItem item : items.values()) {
+            String path = "items." + item.getId();
+            recycleDataConfig.set(path + ".material", item.getMaterial().name());
+            recycleDataConfig.set(path + ".base-recycle-price", item.getBaseRecyclePrice());
+            recycleDataConfig.set(path + ".recycle-multiplier", 1.0);
+            // 不覆盖运行时字段
+        }
+        saveFile(recycleDataConfig, recycleFile);
+    }
+
     // ---- Pressure Data (v1.1.1) ----
 
     @Override
