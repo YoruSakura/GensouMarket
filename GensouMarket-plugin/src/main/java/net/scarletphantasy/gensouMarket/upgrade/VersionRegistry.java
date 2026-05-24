@@ -20,5 +20,5 @@ public final class VersionRegistry {
     public static final int CURRENT_CONFIG_VERSION = CONFIG_VERSION_1_1_2;
 
     /** 当前插件版本字符串（与 build.gradle 保持同步） */
-    public static final String PLUGIN_VERSION = "1.1.2";
+    public static final String PLUGIN_VERSION = "1.1.2-dev";
 }

@@ -604,8 +604,11 @@ public class GuiListener implements Listener {
                         ShopGui.openShop(plugin, player, page);
                         return;
                     }
-                    plugin.getShopManager().buyFromShop(player, shopItem.getId(), amount);
-                    ShopGui.openShop(plugin, player, page);
+                    plugin.getShopManager().buyFromShop(player, shopItem.getId(), amount, () -> {
+                        if (player.isOnline() && isViewingShopPage(player, page)) {
+                            ShopGui.openShop(plugin, player, page);
+                        }
+                    });
                 } else {
                     // v1.1.2 缺货预检查：在创建确认会话前检查库存
                     int available = plugin.getShopManager().computeAvailableStock(shopItem);
@@ -697,6 +700,15 @@ public class GuiListener implements Listener {
                 }
             }
         }
+    }
+
+    private boolean isViewingShopPage(Player player, int expectedPage) {
+        Inventory topInventory = player.getOpenInventory().getTopInventory();
+        if (!(topInventory.getHolder() instanceof GuiHolder holder)) {
+            return false;
+        }
+        return holder.getType() == GuiHolder.GuiType.SHOP
+                && holder.getIntData("page", -1) == expectedPage;
     }
 
     private void unregisterView(Player player) {

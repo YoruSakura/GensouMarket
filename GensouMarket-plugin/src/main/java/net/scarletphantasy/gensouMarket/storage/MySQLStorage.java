@@ -47,7 +47,7 @@ public class MySQLStorage implements StorageProvider {
 
     @Override
     public void initialize() throws Exception {
-        dataSource = new HikariDataSource(createHikariConfig());
+        initDataSource();
 
         try (Connection conn = getConnection()) {
             createTables(conn);

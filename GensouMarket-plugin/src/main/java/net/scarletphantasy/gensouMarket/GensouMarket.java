@@ -94,6 +94,7 @@ public final class GensouMarket extends JavaPlugin {
 
         try {
             storage.initialize();
+            upgradeManager.markStorageInitialized();
             getLogger().info("数据存储已初始化 (" + configManager.getStorageType() + ")");
         } catch (Exception e) {
             getLogger().severe("无法初始化数据存储！" + e.getMessage());

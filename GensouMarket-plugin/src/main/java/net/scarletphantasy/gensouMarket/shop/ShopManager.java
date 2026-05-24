@@ -22,6 +22,7 @@ import net.scarletphantasy.gensouMarket.config.ShopPricingConfig;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.UUID;
 
 public class ShopManager {
 
@@ -173,14 +174,20 @@ public class ShopManager {
     }
 
     public void buyFromShop(Player player, String itemId, int amount) {
+        buyFromShop(player, itemId, amount, null);
+    }
+
+    public void buyFromShop(Player player, String itemId, int amount, Runnable onComplete) {
         if (!config.isShopEnabled()) {
             MessageUtil.send(player, "&c服务器商店未启用！");
+            if (onComplete != null) onComplete.run();
             return;
         }
 
         ShopItem shopItem = shopItems.get(itemId);
         if (shopItem == null) {
             MessageUtil.send(player, "&c未找到该商品！");
+            if (onComplete != null) onComplete.run();
             return;
         }
 
@@ -192,6 +199,7 @@ public class ShopManager {
             recycleSource = resolveRecycleSource(shopItem);
             if (recycleSource == null) {
                 MessageUtil.send(player, "&c该回流商品的回收来源未配置，无法购买！");
+                if (onComplete != null) onComplete.run();
                 return;
             }
         }
@@ -200,10 +208,12 @@ public class ShopManager {
         int available = computeAvailableStock(shopItem);
         if (available <= 0) {
             MessageUtil.send(player, "&c该商品已缺货！");
+            if (onComplete != null) onComplete.run();
             return;
         }
         if (available < amount) {
             MessageUtil.send(player, "&c库存不足，当前剩余 &e" + available + "&c 个！");
+            if (onComplete != null) onComplete.run();
             return;
         }
 
@@ -214,18 +224,20 @@ public class ShopManager {
 
         if (!vault.has(player, totalCost)) {
             MessageUtil.send(player, "&c你没有足够的金币！需要: &e" + MessageUtil.formatMoney(totalCost));
+            if (onComplete != null) onComplete.run();
             return;
         }
 
         // ---- v1.1.2 跨服 recycled 购买分支 ----
         if (shopItem.isRecycled() && plugin.isClusterEnabled() && recycleSource != null) {
-            buyRecycledCluster(player, shopItem, recycleSource, amount, pricePerUnit, totalCost);
+            buyRecycledCluster(player, shopItem, recycleSource, amount, pricePerUnit, totalCost, onComplete);
             return;
         }
 
         // 非跨服或非 recycled：同步流程
         if (!vault.withdraw(player, totalCost)) {
             MessageUtil.send(player, "&c扣款失败，请稍后重试购买！");
+            if (onComplete != null) onComplete.run();
             return;
         }
 
@@ -263,6 +275,8 @@ public class ShopManager {
                 .append(Component.text(" (单价: ", NamedTextColor.GREEN))
                 .append(Component.text(MessageUtil.formatMoney(pricePerUnit), NamedTextColor.YELLOW))
                 .append(Component.text(")", NamedTextColor.GREEN)));
+
+        if (onComplete != null) onComplete.run();
     }
 
     /**
@@ -271,8 +285,9 @@ public class ShopManager {
      * 使用 MySQL 条件扣减避免超卖，成功后回主线程交付物品。
      */
     private void buyRecycledCluster(Player player, ShopItem shopItem, RecycleItem recycleSource,
-                                     int amount, double pricePerUnit, double totalCost) {
+                                     int amount, double pricePerUnit, double totalCost, Runnable onComplete) {
         final long now = System.currentTimeMillis();
+        final UUID playerUuid = player.getUniqueId();
 
         // 异步执行 MySQL 条件扣减
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
@@ -281,30 +296,34 @@ public class ShopManager {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (!consumed) {
                     MessageUtil.send(player, "&c库存不足或已被其他服务器抢购，请稍后重试！");
+                    if (onComplete != null) onComplete.run();
                     return;
                 }
 
                 // MySQL 扣减成功，再次确认玩家状态
                 if (!player.isOnline()) {
                     // 玩家离线，异步补偿库存
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () ->
-                            storage.addRecycleStockDelta(recycleSource, amount, 0, System.currentTimeMillis()));
+                    compensateRecycleStockAsync(recycleSource, amount, playerUuid,
+                            "shop-buy", "玩家已离线");
+                    if (onComplete != null) onComplete.run();
                     return;
                 }
 
                 if (!vault.has(player, totalCost)) {
                     // 余额不足，异步补偿库存
                     MessageUtil.send(player, "&c余额不足，购买已取消！");
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () ->
-                            storage.addRecycleStockDelta(recycleSource, amount, 0, System.currentTimeMillis()));
+                    compensateRecycleStockAsync(recycleSource, amount, playerUuid,
+                            "shop-buy", "余额不足");
+                    if (onComplete != null) onComplete.run();
                     return;
                 }
 
                 if (!vault.withdraw(player, totalCost)) {
                     // 扣款失败，异步补偿库存
                     MessageUtil.send(player, "&c扣款失败，购买已取消！");
-                    Bukkit.getScheduler().runTaskAsynchronously(plugin, () ->
-                            storage.addRecycleStockDelta(recycleSource, amount, 0, System.currentTimeMillis()));
+                    compensateRecycleStockAsync(recycleSource, amount, playerUuid,
+                            "shop-buy", "Vault扣款失败");
+                    if (onComplete != null) onComplete.run();
                     return;
                 }
 
@@ -336,7 +355,27 @@ public class ShopManager {
                         .append(Component.text(" (单价: ", NamedTextColor.GREEN))
                         .append(Component.text(MessageUtil.formatMoney(pricePerUnit), NamedTextColor.YELLOW))
                         .append(Component.text(")", NamedTextColor.GREEN)));
+
+                if (onComplete != null) onComplete.run();
             });
+        });
+    }
+
+    /**
+     * v1.1.2 异步补偿回流库存。检查返回值，失败时写 SEVERE 日志。
+     */
+    private void compensateRecycleStockAsync(RecycleItem recycleSource, int amount,
+                                              UUID playerUuid, String action, String reason) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            boolean ok = storage.addRecycleStockDelta(recycleSource, amount, 0, System.currentTimeMillis());
+            if (!ok) {
+                plugin.getLogger().severe(
+                        "[Shop] 回流库存补偿失败！item=" + recycleSource.getId()
+                        + " amount=" + amount
+                        + " player=" + playerUuid
+                        + " action=" + action
+                        + " reason=" + reason);
+            }
         });
     }
 

@@ -41,9 +41,21 @@ public class YamlMetaStore implements MetaStore {
     }
 
     @Override
+    public void setStrict(String key, String value) throws Exception {
+        config.set(key, value);
+        saveStrict();
+    }
+
+    @Override
     public void setInt(String key, int value) {
         config.set(key, value);
         save();
+    }
+
+    @Override
+    public void setIntStrict(String key, int value) throws Exception {
+        config.set(key, value);
+        saveStrict();
     }
 
     @Override
@@ -57,5 +69,9 @@ public class YamlMetaStore implements MetaStore {
         } catch (IOException e) {
             LOGGER.log(Level.WARNING, "[UpgradeMeta] 保存 upgrade-state.yml 失败", e);
         }
+    }
+
+    private void saveStrict() throws IOException {
+        config.save(file);
     }
 }

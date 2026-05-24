@@ -67,6 +67,15 @@ public class SqlMetaStore implements MetaStore {
 
     @Override
     public void set(String key, String value) {
+        try {
+            setStrict(key, value);
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "[UpgradeMeta] 写入 meta key=" + key + " 失败", e);
+        }
+    }
+
+    @Override
+    public void setStrict(String key, String value) throws Exception {
         String sql;
         if (isMysql) {
             sql = "INSERT INTO gensoumarket_meta (meta_key, meta_value, updated_at) VALUES (?, ?, ?) " +
@@ -80,8 +89,6 @@ public class SqlMetaStore implements MetaStore {
             ps.setString(2, value);
             ps.setLong(3, System.currentTimeMillis());
             ps.executeUpdate();
-        } catch (SQLException e) {
-            LOGGER.log(Level.WARNING, "[UpgradeMeta] 写入 meta key=" + key + " 失败", e);
         }
     }
 }

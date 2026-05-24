@@ -50,6 +50,12 @@ public class UpgradeManager {
     /** 存储侧元数据（gensoumarket_meta 表或 upgrade-state.yml 内的 data-* 节点） */
     private MetaStore dataMeta;
 
+    // P0-2: 延迟写入状态
+    private int storedDataVersionBeforeMigration;
+    private int storedConfigVersionBeforeMigration;
+    private List<String> executedMigrationSteps = Collections.emptyList();
+    private boolean migrationRanSuccessfully = false;
+
     public UpgradeManager(File dataFolder, String storageType) {
         this.dataFolder = dataFolder;
         this.storageType = storageType;
@@ -87,10 +93,8 @@ public class UpgradeManager {
 
         // 首次安装或从旧版本升级
         if (storedConfigVersion == 0) {
-            configMeta.setInt("config-version", VersionRegistry.CURRENT_CONFIG_VERSION);
+            configMeta.setIntStrict("config-version", VersionRegistry.CURRENT_CONFIG_VERSION);
         }
-
-        configMeta.set("last-plugin-version", VersionRegistry.PLUGIN_VERSION);
     }
 
     // ========== Phase 2: 存储侧迁移 ==========
@@ -98,10 +102,10 @@ public class UpgradeManager {
     /**
      * 在 StorageFactory.create() 之后、storage.initialize() 之前调用。
      * <p>
-     * MySQL 模式下会先初始化连接池和 meta 表，然后检查降级和执行迁移。
-     * SQLite/YAML 模式下使用 upgrade-state.yml 的 data-version 节点。
+     * 只执行：meta 初始化、降级检查、备份、迁移步骤。
+     * <b>不写最终 data-version</b>，需等 storage.initialize() 成功后调用 {@link #markStorageInitialized()}。
      *
-     * @return 迁移结果
+     * @return 迁移结果（中间状态，不含最终版本确认）
      */
     public MigrationResult runStorageMigration(StorageProvider storage) throws Exception {
         // 1. 初始化 dataMeta
@@ -115,41 +119,41 @@ public class UpgradeManager {
             dataMeta = configMeta;
         }
 
-        int storedDataVersion = dataMeta.getInt("data-version", 0);
-        int storedConfigVersion = configMeta.getInt("config-version", 0);
+        storedDataVersionBeforeMigration = dataMeta.getInt("data-version", 0);
+        storedConfigVersionBeforeMigration = configMeta.getInt("config-version", 0);
 
         // 2. 降级检查：数据版本
-        if (storedDataVersion > VersionRegistry.CURRENT_DATA_VERSION) {
+        if (storedDataVersionBeforeMigration > VersionRegistry.CURRENT_DATA_VERSION) {
             String reason = String.format(
                     "数据版本降级阻断！存储数据版本=%d > 当前支持最大=%d。" +
                     "请恢复到最后使用的插件版本或联系开发者。",
-                    storedDataVersion, VersionRegistry.CURRENT_DATA_VERSION);
+                    storedDataVersionBeforeMigration, VersionRegistry.CURRENT_DATA_VERSION);
             LOGGER.severe("[Upgrade] " + reason);
 
             MigrationResult blocked = MigrationResult.blocked(
-                    storedDataVersion, VersionRegistry.CURRENT_DATA_VERSION,
-                    storedConfigVersion, VersionRegistry.CURRENT_CONFIG_VERSION,
+                    storedDataVersionBeforeMigration, VersionRegistry.CURRENT_DATA_VERSION,
+                    storedConfigVersionBeforeMigration, VersionRegistry.CURRENT_CONFIG_VERSION,
                     List.of(reason));
             reportWriter.writeReport(storageType, blocked);
 
             throw new UpgradeBlockedException(reason);
         }
 
-        // 3. 已是最新版本
-        if (storedDataVersion >= VersionRegistry.CURRENT_DATA_VERSION) {
-            LOGGER.info("[Upgrade] 数据版本已是最新 (v" + storedDataVersion + ")");
-            dataMeta.set("last-plugin-version", VersionRegistry.PLUGIN_VERSION);
+        // 3. 已是最新版本 — 仍然延迟到 markStorageInitialized 写最终确认
+        if (storedDataVersionBeforeMigration >= VersionRegistry.CURRENT_DATA_VERSION) {
+            LOGGER.info("[Upgrade] 数据版本已是最新 (v" + storedDataVersionBeforeMigration + ")");
+            executedMigrationSteps = Collections.emptyList();
+            migrationRanSuccessfully = true;
 
-            MigrationResult result = MigrationResult.success(
-                    storedDataVersion, storedDataVersion,
-                    storedConfigVersion, VersionRegistry.CURRENT_CONFIG_VERSION,
+            // 不写 data-version / report，等 storage.initialize() 成功
+            return MigrationResult.success(
+                    storedDataVersionBeforeMigration, storedDataVersionBeforeMigration,
+                    storedConfigVersionBeforeMigration, VersionRegistry.CURRENT_CONFIG_VERSION,
                     Collections.emptyList());
-            reportWriter.writeReport(storageType, result);
-            return result;
         }
 
         // 4. 需要迁移
-        LOGGER.info("[Upgrade] 检测到数据版本 v" + storedDataVersion
+        LOGGER.info("[Upgrade] 检测到数据版本 v" + storedDataVersionBeforeMigration
                 + " → v" + VersionRegistry.CURRENT_DATA_VERSION + "，开始迁移...");
 
         // 4.1 备份
@@ -159,42 +163,80 @@ public class UpgradeManager {
         backupService.createBackup();
 
         // 4.2 构建迁移步骤
-        List<MigrationStep> steps = buildMigrationSteps(storage, storedDataVersion);
-        List<String> executedSteps = new ArrayList<>();
+        List<MigrationStep> steps = buildMigrationSteps(storage, storedDataVersionBeforeMigration);
+        List<String> executed = new ArrayList<>();
 
         try {
             for (MigrationStep step : steps) {
                 LOGGER.info("[Upgrade] 执行迁移: " + step.id()
                         + " (v" + step.fromDataVersion() + " → v" + step.toDataVersion() + ")");
                 step.migrate();
-                executedSteps.add(step.id());
-                dataMeta.setInt("data-version", step.toDataVersion());
-                dataMeta.set("last-migration-id", step.id());
+                executed.add(step.id());
+                // 注意：不在这里写 data-version，延迟到 markStorageInitialized
             }
         } catch (Exception e) {
             LOGGER.log(Level.SEVERE, "[Upgrade] 迁移失败！插件将禁用。", e);
 
             MigrationResult failed = MigrationResult.failed(
-                    storedDataVersion, storedConfigVersion,
-                    executedSteps, e.getMessage());
+                    storedDataVersionBeforeMigration, storedConfigVersionBeforeMigration,
+                    executed, e.getMessage());
             reportWriter.writeReport(storageType, failed);
 
             throw new UpgradeMigrationException("迁移步骤失败: " + e.getMessage(), e);
         }
 
-        // 5. 迁移成功
-        dataMeta.setInt("data-version", VersionRegistry.CURRENT_DATA_VERSION);
-        dataMeta.set("last-plugin-version", VersionRegistry.PLUGIN_VERSION);
-        configMeta.setInt("config-version", VersionRegistry.CURRENT_CONFIG_VERSION);
+        executedMigrationSteps = executed;
+        migrationRanSuccessfully = true;
 
-        MigrationResult result = MigrationResult.success(
-                storedDataVersion, VersionRegistry.CURRENT_DATA_VERSION,
-                storedConfigVersion, VersionRegistry.CURRENT_CONFIG_VERSION,
-                executedSteps);
-        reportWriter.writeReport(storageType, result);
+        LOGGER.info("[Upgrade] 迁移步骤全部执行成功，等待 storage.initialize() 确认...");
+        return MigrationResult.success(
+                storedDataVersionBeforeMigration, VersionRegistry.CURRENT_DATA_VERSION,
+                storedConfigVersionBeforeMigration, VersionRegistry.CURRENT_CONFIG_VERSION,
+                executed);
+    }
 
-        LOGGER.info("[Upgrade] 迁移完成！数据版本: v" + VersionRegistry.CURRENT_DATA_VERSION);
-        return result;
+    // ========== Phase 3: 确认版本写入 ==========
+
+    /**
+     * 在 storage.initialize() 成功后调用。
+     * 写入最终 data-version、last-plugin-version、last-migration-id 和成功报告。
+     * <p>
+     * 如果 storage.initialize() 失败，不得调用此方法 — 版本不会被提前标记。
+     * 写入失败会抛出异常，阻止业务模块启动。
+     */
+    public void markStorageInitialized() throws Exception {
+        if (!migrationRanSuccessfully) {
+            LOGGER.warning("[Upgrade] markStorageInitialized 被调用但迁移未成功完成，跳过版本写入");
+            return;
+        }
+
+        try {
+            dataMeta.setIntStrict("data-version", VersionRegistry.CURRENT_DATA_VERSION);
+            dataMeta.setStrict("last-plugin-version", VersionRegistry.PLUGIN_VERSION);
+            configMeta.setIntStrict("config-version", VersionRegistry.CURRENT_CONFIG_VERSION);
+            configMeta.setStrict("last-plugin-version", VersionRegistry.PLUGIN_VERSION);
+
+            if (!executedMigrationSteps.isEmpty()) {
+                dataMeta.setStrict("last-migration-id", executedMigrationSteps.get(executedMigrationSteps.size() - 1));
+            }
+
+            MigrationResult result = MigrationResult.success(
+                    storedDataVersionBeforeMigration, VersionRegistry.CURRENT_DATA_VERSION,
+                    storedConfigVersionBeforeMigration, VersionRegistry.CURRENT_CONFIG_VERSION,
+                    executedMigrationSteps);
+            reportWriter.writeReport(storageType, result);
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "[Upgrade] 版本确认写入失败！插件将禁用。", e);
+            MigrationResult failed = MigrationResult.failed(
+                    storedDataVersionBeforeMigration,
+                    storedConfigVersionBeforeMigration,
+                    executedMigrationSteps,
+                    "版本确认写入失败: " + e.getMessage());
+            reportWriter.writeReport(storageType, failed);
+            throw e;
+        }
+
+        LOGGER.info("[Upgrade] 版本确认完成！数据版本: v" + VersionRegistry.CURRENT_DATA_VERSION);
     }
 
     /**
