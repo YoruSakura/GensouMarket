@@ -2,7 +2,7 @@
 
 GensouMarket 是一个面向 Minecraft 服务器的经济交易插件。玩家可以在游戏内完成市场买卖、拍卖、服务器商店购买、物品回收、个人商店展示和面对面交易；服主可以按模块开关功能，并在单服或 Velocity 群组服中使用。
 
-当前版本：`v1.1.2`
+当前版本：`v1.2`
 
 主命令：`/gmarket`
 完整命令：`/gensoumarket`
@@ -133,22 +133,22 @@ Velocity 群组服中，一个子服的回收压力可以同步到其他子服�
 
 ### 基础要求
 
-- Java 21
-- Paper 1.21 系列服务器
+- Paper 1.21 或更新版本
+- Java 版本按你的 Paper 服务端要求准备
 - Vault
 - 一个支持 Vault 的经济插件
 
 ### 下载文件
 
-从 GitHub Release 下载：<https://github.com/YoruSakura/GensouMarket/releases/tag/v1.1.2>
+从 GitHub Release 下载：<https://github.com/YoruSakura/GensouMarket/releases/tag/v1.2>
 
-- `GensouMarket-plugin-1.1.2.jar`：放到 Paper 子服的 `plugins` 文件夹。
-- `GensouMarket-velocity-1.1.2.jar`：跨服模式才需要，放到 Velocity 的 `plugins` 文件夹。
-- `GensouMarket-1.1.2-sha256.txt`：用于校验下载文件。
+- `GensouMarket-plugin-1.2.jar`：放到 Paper 子服的 `plugins` 文件夹。
+- `GensouMarket-velocity-1.2.jar`：跨服模式才需要，放到 Velocity 的 `plugins` 文件夹。
+- `GensouMarket-1.2-sha256.txt`：用于校验下载文件。
 
 ### 单服安装
 
-1. 把 `GensouMarket-plugin-1.1.2.jar` 放进 Paper 服务器的 `plugins` 文件夹。
+1. 把 `GensouMarket-plugin-1.2.jar` 放进 Paper 服务器的 `plugins` 文件夹。
 2. 确保已经安装 Vault 和经济插件。
 3. 重启服务器。
 4. 首次启动后会生成 `config.yml`、`shop.yml`、`recycle.yml` 等配置。
@@ -158,8 +158,8 @@ Velocity 群组服中，一个子服的回收压力可以同步到其他子服�
 
 ### Velocity 跨服安装
 
-1. 每个 Paper 子服都安装 `GensouMarket-plugin-1.1.2.jar`。
-2. Velocity 代理端安装 `GensouMarket-velocity-1.1.2.jar`。
+1. 每个 Paper 子服都安装 `GensouMarket-plugin-1.2.jar`。
+2. Velocity 代理端安装 `GensouMarket-velocity-1.2.jar`。
 3. 所有子服使用同一个 MySQL 数据库。
 4. 每个子服在 `config.yml` 中设置：
    - `storage.type: mysql`

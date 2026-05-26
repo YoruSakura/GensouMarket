@@ -5,7 +5,23 @@ plugins {
 }
 
 group = 'net.scarletphantasy'
-version = '1.1.2'
+version = '1.2'
+
+def targetJavaVersion = 21
+def paperBaselineApiVersion = providers.gradleProperty("paperBaselineApiVersion")
+        .orElse("1.21-R0.1-SNAPSHOT")
+        .get()
+def paperLatestApiVersion = providers.gradleProperty("paperLatestApiVersion")
+        .orElse("26.1.2.build.65-stable")
+        .get()
+def paperLatestApiJavaVersion = providers.gradleProperty("paperLatestApiJavaVersion")
+        .orElse("25")
+        .get()
+        .toInteger()
+def paperRunMinecraftVersion = providers.gradleProperty("paperRunMinecraftVersion")
+        .orElse("1.21")
+        .get()
+def jetbrainsAnnotationsVersion = "26.0.2"
 
 repositories {
     mavenCentral()
@@ -19,21 +35,36 @@ repositories {
     }
 }
 
+configurations {
+    paperLatestApiCompileClasspath {
+        canBeConsumed = false
+        canBeResolved = true
+    }
+}
+
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT")
+    // Keep the shipped jar compiled against the oldest supported Paper API.
+    compileOnly("io.papermc.paper:paper-api:${paperBaselineApiVersion}")
+    compileOnly("org.jetbrains:annotations:${jetbrainsAnnotationsVersion}")
     compileOnly("com.github.MilkBowl:VaultAPI:1.7.1")
     compileOnly("com.github.Zrips:CMI-API:9.8.6.4") {
         transitive = false
     }
     implementation("com.zaxxer:HikariCP:6.2.1")
+
+    // Optional verification classpath for the latest Paper API line.
+    paperLatestApiCompileClasspath("io.papermc.paper:paper-api:${paperLatestApiVersion}")
+    paperLatestApiCompileClasspath("org.jetbrains:annotations:${jetbrainsAnnotationsVersion}")
+    paperLatestApiCompileClasspath("com.github.MilkBowl:VaultAPI:1.7.1")
+    paperLatestApiCompileClasspath("com.github.Zrips:CMI-API:9.8.6.4") {
+        transitive = false
+    }
+    paperLatestApiCompileClasspath("com.zaxxer:HikariCP:6.2.1")
 }
 
 tasks {
     runServer {
-        // Configure the Minecraft version for our task.
-        // This is the only required configuration besides applying the plugin.
-        // Your plugin's jar (or shadowJar if present) will be used automatically.
-        minecraftVersion("1.21")
+        minecraftVersion(paperRunMinecraftVersion)
     }
 
     shadowJar {
@@ -49,7 +80,6 @@ tasks {
     }
 }
 
-def targetJavaVersion = 21
 java {
     def javaVersion = JavaVersion.toVersion(targetJavaVersion)
     sourceCompatibility = javaVersion
@@ -65,6 +95,26 @@ tasks.withType(JavaCompile).configureEach {
     if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
         options.release.set(targetJavaVersion)
     }
+}
+
+tasks.register("compilePaperLatestApiJava", JavaCompile) {
+    group = "verification"
+    description = "Compiles the Paper plugin sources against Paper API ${paperLatestApiVersion}."
+    source = sourceSets.main.java
+    classpath = configurations.paperLatestApiCompileClasspath
+    destinationDirectory = layout.buildDirectory.dir("classes/java/paperLatestApi")
+    options.encoding = "UTF-8"
+    options.release.set(paperLatestApiJavaVersion)
+    javaCompiler = javaToolchains.compilerFor {
+        languageVersion = JavaLanguageVersion.of(paperLatestApiJavaVersion)
+    }
+}
+
+tasks.register("checkPaperApiCompatibility") {
+    group = "verification"
+    description = "Checks the plugin against the baseline Paper API and the latest Paper API."
+    dependsOn(tasks.named("compileJava"))
+    dependsOn(tasks.named("compilePaperLatestApiJava"))
 }
 
 processResources {
