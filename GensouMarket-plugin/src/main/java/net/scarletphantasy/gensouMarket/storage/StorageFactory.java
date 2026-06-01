@@ -18,8 +18,8 @@ public final class StorageFactory {
                     config.getMysqlUsername(),
                     config.getMysqlPassword()
             );
-            case "yaml", "yml" -> new YamlStorage(dataFolder);
-            default -> new SQLiteStorage(dataFolder);
+            case "sqlite" -> new SQLiteStorage(dataFolder, config.getSqlitePath());
+            default -> throw new IllegalArgumentException("不支持的存储方式: " + type + "，仅支持 sqlite 或 mysql");
         };
     }
 }

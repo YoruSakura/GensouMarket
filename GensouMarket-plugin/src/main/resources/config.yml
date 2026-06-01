@@ -2,9 +2,13 @@
 # 幻想集市 (GensouMarket) 配置文件
 # ==============================
 
-# 数据存储方式: sqlite (默认), mysql (建议), yaml (不推荐)
+# 数据存储方式: sqlite (默认), mysql (生产跨服推荐)
 storage:
   type: sqlite
+  # SQLite 配置：留空时使用本服插件目录下的 data.db。
+  # 若要在同一系统用户下用 SQLite 开跨服，所有子服必须填写同一个本地文件路径（建议绝对路径）。
+  sqlite:
+    path: ""
   # MySQL 配置 (仅当 type 为 mysql 时生效)
   mysql:
     host: localhost

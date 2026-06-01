@@ -47,7 +47,7 @@ public class BackupService {
             }
         }
 
-        // 备份 data/ 目录（SQLite/YAML 数据文件）
+        // 备份 data/ 目录（旧版 YAML 数据或其他运行数据）
         File dataDir = new File(dataFolder, "data");
         if (dataDir.exists() && dataDir.isDirectory()) {
             File backupDataDir = new File(backupDir, "data");

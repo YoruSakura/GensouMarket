@@ -115,7 +115,7 @@ public class UpgradeManager {
             sqlMeta.initialize();
             dataMeta = sqlMeta;
         } else {
-            // SQLite / YAML 使用 configMeta 的 data-version 节点（共享 upgrade-state.yml）
+            // SQLite 使用 configMeta 的 data-version 节点（共享 upgrade-state.yml）
             dataMeta = configMeta;
         }
 

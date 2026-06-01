@@ -175,21 +175,21 @@ Velocity 群组服可以在子服之间同步动态价格所需的数据，让�
 4. 首次启动后会生成 `config.yml`、`shop.yml`、`recycle.yml` 等配置。
 5. 修改配置后执行 `/gmarket reload`。
 
-单服默认使用 SQLite。需要数据库时，可以在 `config.yml` 中改为 MySQL。
+单服默认使用 SQLite。需要独立数据库时，可以在 `config.yml` 中改为 MySQL。
 
 ### 🌐 Velocity 跨服安装
 
 1. 每个 Paper 子服都安装 Paper 插件 jar。
 2. Velocity 代理端安装 Velocity 插件 jar。
-3. 所有子服使用同一个 MySQL 数据库。
+3. 所有子服使用同一个 MySQL 数据库，或在同一系统用户下共享同一个本地 SQLite 文件。
 4. 每个子服在 `config.yml` 中设置：
-   - `storage.type: mysql`
+   - `storage.type: mysql`，或 `storage.type: sqlite` 并让 `storage.sqlite.path` 指向同一个绝对路径
    - `cluster.enabled: true`
    - 唯一的 `cluster.server-id`
    - 与 Velocity 端一致的 `cluster.channel`
 5. 重启 Velocity 和所有 Paper 子服。
 
-跨服模式必须使用 MySQL。升级或替换插件时，Paper 主插件和 Velocity 插件请来自同一次发布。
+跨服生产环境推荐 MySQL。SQLite 跨服仅建议用于同机、同系统用户、同一本地数据库文件的轻量部署。升级或替换插件时，Paper 主插件和 Velocity 插件请来自同一次发布。
 
 ## ⚙️ 配置文件
 

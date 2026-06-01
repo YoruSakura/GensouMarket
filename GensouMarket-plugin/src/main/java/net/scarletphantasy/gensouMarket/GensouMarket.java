@@ -73,13 +73,28 @@ public final class GensouMarket extends JavaPlugin {
         getLogger().info("已连接 Vault 经济系统");
 
         // 初始化存储
-        storage = StorageFactory.create(configManager, getDataFolder());
-
-        // 跨服模式校验：必须使用 MySQL
-        if (configManager.isClusterEnabled() && !"mysql".equalsIgnoreCase(configManager.getStorageType())) {
-            getLogger().severe("跨服模式 (cluster.enabled=true) 必须使用 MySQL 存储！当前: " + configManager.getStorageType());
+        try {
+            storage = StorageFactory.create(configManager, getDataFolder());
+        } catch (IllegalArgumentException e) {
+            getLogger().severe(e.getMessage());
+            getLogger().severe("YAML 运行时存储已移除，请改用 SQLite 或 MySQL。");
             getServer().getPluginManager().disablePlugin(this);
             return;
+        }
+
+        // 跨服模式校验：支持 MySQL，或同机同用户共享同一个本地 SQLite 文件。
+        if (configManager.isClusterEnabled()) {
+            String storageType = configManager.getStorageType();
+            boolean mysqlStorage = "mysql".equalsIgnoreCase(storageType);
+            boolean sqliteStorage = "sqlite".equalsIgnoreCase(storageType);
+            if (!mysqlStorage && !sqliteStorage) {
+                getLogger().severe("跨服模式 (cluster.enabled=true) 仅支持 MySQL 或 SQLite 共享文件存储！当前: " + storageType);
+                getServer().getPluginManager().disablePlugin(this);
+                return;
+            }
+            if (sqliteStorage) {
+                getLogger().warning("跨服模式正在使用 SQLite。请确保所有子服在同一系统用户下访问同一个本地 data.db；生产高并发仍建议 MySQL。");
+            }
         }
 
         // v1.1.2 升级框架 Phase 2：存储侧迁移与降级阻断

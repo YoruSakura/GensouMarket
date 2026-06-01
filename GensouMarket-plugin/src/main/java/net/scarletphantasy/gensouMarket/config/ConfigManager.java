@@ -63,6 +63,7 @@ public class ConfigManager {
 
     // ---- Storage ----
     public String getStorageType() { return config.getString("storage.type", "sqlite"); }
+    public String getSqlitePath() { return config.getString("storage.sqlite.path", ""); }
     public String getMysqlHost() { return config.getString("storage.mysql.host", "localhost"); }
     public int getMysqlPort() { return config.getInt("storage.mysql.port", 3306); }
     public String getMysqlDatabase() { return config.getString("storage.mysql.database", "gensoumarket"); }

@@ -14,20 +14,47 @@ public class SQLiteStorage implements StorageProvider {
 
     private static final Logger LOGGER = Logger.getLogger("GensouMarket");
     private final File dataFolder;
+    private final String configuredPath;
     private Connection connection;
 
     public SQLiteStorage(File dataFolder) {
+        this(dataFolder, "");
+    }
+
+    public SQLiteStorage(File dataFolder, String configuredPath) {
         this.dataFolder = dataFolder;
+        this.configuredPath = configuredPath;
     }
 
     @Override
-    public void initialize() throws Exception {
-        File dbFile = new File(dataFolder, "data.db");
+    public synchronized void initialize() throws Exception {
+        File dbFile = resolveDatabaseFile();
+        File parent = dbFile.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IllegalStateException("无法创建 SQLite 数据目录: " + parent.getAbsolutePath());
+        }
         connection = DriverManager.getConnection("jdbc:sqlite:" + dbFile.getAbsolutePath());
         connection.setAutoCommit(true);
+        configureConnection();
         createTables();
         migrateSchema();
         migrateShopToRecycle();
+    }
+
+    private File resolveDatabaseFile() {
+        if (configuredPath == null || configuredPath.isBlank()) {
+            return new File(dataFolder, "data.db");
+        }
+        File configured = new File(configuredPath);
+        return configured.isAbsolute() ? configured : new File(dataFolder, configuredPath);
+    }
+
+    private void configureConnection() throws SQLException {
+        try (Statement stmt = connection.createStatement()) {
+            stmt.execute("PRAGMA journal_mode=WAL");
+            stmt.execute("PRAGMA synchronous=NORMAL");
+            stmt.execute("PRAGMA busy_timeout=5000");
+        }
     }
 
     private void createTables() throws SQLException {
@@ -136,7 +163,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void shutdown() {
+    public synchronized void shutdown() {
         try {
             if (connection != null && !connection.isClosed()) {
                 connection.close();
@@ -149,7 +176,7 @@ public class SQLiteStorage implements StorageProvider {
     // ---- Market Listings ----
 
     @Override
-    public int saveListing(MarketListing listing) {
+    public synchronized int saveListing(MarketListing listing) {
         String sql = "INSERT INTO market_listings (seller_uuid, seller_name, item_data, price, list_time, expire_time, status) VALUES (?,?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             ps.setString(1, listing.getSellerUuid().toString());
@@ -174,7 +201,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void updateListing(MarketListing listing) {
+    public synchronized void updateListing(MarketListing listing) {
         String sql = "UPDATE market_listings SET status=?, buyer_uuid=?, buyer_name=? WHERE id=?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, listing.getStatus().name());
@@ -188,7 +215,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public MarketListing getListing(int id) {
+    public synchronized MarketListing getListing(int id) {
         String sql = "SELECT * FROM market_listings WHERE id=?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, id);
@@ -202,7 +229,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public List<MarketListing> getActiveListings() {
+    public synchronized List<MarketListing> getActiveListings() {
         List<MarketListing> list = new ArrayList<>();
         String sql = "SELECT * FROM market_listings WHERE status='ACTIVE' ORDER BY list_time DESC";
         try (Statement stmt = connection.createStatement();
@@ -215,7 +242,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public List<MarketListing> getPlayerListings(UUID playerUuid) {
+    public synchronized List<MarketListing> getPlayerListings(UUID playerUuid) {
         List<MarketListing> list = new ArrayList<>();
         String sql = "SELECT * FROM market_listings WHERE seller_uuid=? AND status='ACTIVE' ORDER BY list_time DESC";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -230,7 +257,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public boolean markListingSoldIfActive(int listingId, UUID buyerUuid, String buyerName) {
+    public synchronized boolean markListingSoldIfActive(int listingId, UUID buyerUuid, String buyerName) {
         String sql = "UPDATE market_listings SET status='SOLD', buyer_uuid=?, buyer_name=? WHERE id=? AND status='ACTIVE'";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, buyerUuid.toString());
@@ -244,7 +271,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public boolean markListingExpiredIfActive(int listingId) {
+    public synchronized boolean markListingExpiredIfActive(int listingId) {
         String sql = "UPDATE market_listings SET status='EXPIRED' WHERE id=? AND status='ACTIVE'";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, listingId);
@@ -275,7 +302,7 @@ public class SQLiteStorage implements StorageProvider {
     // ---- Auctions ----
 
     @Override
-    public int saveAuction(Auction auction) {
+    public synchronized int saveAuction(Auction auction) {
         String sql = "INSERT INTO auctions (seller_uuid, seller_name, item_data, starting_price, current_price, highest_bidder_uuid, highest_bidder_name, start_time, end_time, status) VALUES (?,?,?,?,?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             ps.setString(1, auction.getSellerUuid().toString());
@@ -303,7 +330,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void updateAuction(Auction auction) {
+    public synchronized void updateAuction(Auction auction) {
         String sql = "UPDATE auctions SET current_price=?, highest_bidder_uuid=?, highest_bidder_name=?, status=? WHERE id=?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setDouble(1, auction.getCurrentPrice());
@@ -318,7 +345,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public Auction getAuction(int id) {
+    public synchronized Auction getAuction(int id) {
         String sql = "SELECT * FROM auctions WHERE id=?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, id);
@@ -332,7 +359,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public List<Auction> getActiveAuctions() {
+    public synchronized List<Auction> getActiveAuctions() {
         List<Auction> list = new ArrayList<>();
         String sql = "SELECT * FROM auctions WHERE status='ACTIVE' ORDER BY end_time ASC";
         try (Statement stmt = connection.createStatement();
@@ -345,7 +372,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public boolean updateAuctionBidIfMatch(int auctionId, double expectedCurrentPrice,
+    public synchronized boolean updateAuctionBidIfMatch(int auctionId, double expectedCurrentPrice,
                                             double newPrice, UUID newBidderUuid, String newBidderName) {
         String sql = "UPDATE auctions SET current_price=?, highest_bidder_uuid=?, highest_bidder_name=? " +
                      "WHERE id=? AND status='ACTIVE' AND current_price=?";
@@ -363,7 +390,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public boolean markAuctionEndedIfActive(int auctionId) {
+    public synchronized boolean markAuctionEndedIfActive(int auctionId) {
         String sql = "UPDATE auctions SET status='ENDED' WHERE id=? AND status='ACTIVE'";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, auctionId);
@@ -375,7 +402,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public boolean markAuctionCancelledIfActive(int auctionId) {
+    public synchronized boolean markAuctionCancelledIfActive(int auctionId) {
         String sql = "UPDATE auctions SET status='CANCELLED' WHERE id=? AND status='ACTIVE'";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, auctionId);
@@ -431,7 +458,7 @@ public class SQLiteStorage implements StorageProvider {
     // ---- Shop Data ----
 
     @Override
-    public void saveShopData(ShopItem item) {
+    public synchronized void saveShopData(ShopItem item) {
         String sql = "INSERT OR REPLACE INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             bindShopItem(ps, item);
@@ -442,7 +469,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void saveAllShopData(Map<String, ShopItem> items) {
+    public synchronized void saveAllShopData(Map<String, ShopItem> items) {
         String sql = "INSERT OR REPLACE INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             for (ShopItem item : items.values()) {
@@ -472,7 +499,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public Map<String, ShopItem> loadShopData() {
+    public synchronized Map<String, ShopItem> loadShopData() {
         Map<String, ShopItem> map = new LinkedHashMap<>();
         String sql = "SELECT item_id, material, base_buy_price, sell_multiplier, total_bought, last_update, mode, stock_mode, available_stock, recycle_source_id FROM shop_data";
         try (Statement stmt = connection.createStatement();
@@ -506,7 +533,7 @@ public class SQLiteStorage implements StorageProvider {
     // ---- Recycle Data ----
 
     @Override
-    public void saveRecycleData(RecycleItem item) {
+    public synchronized void saveRecycleData(RecycleItem item) {
         String sql = "INSERT OR REPLACE INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock) VALUES (?,?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, item.getId());
@@ -523,7 +550,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void saveAllRecycleData(Map<String, RecycleItem> items) {
+    public synchronized void saveAllRecycleData(Map<String, RecycleItem> items) {
         String sql = "INSERT OR REPLACE INTO recycle_data (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock) VALUES (?,?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             for (RecycleItem item : items.values()) {
@@ -543,7 +570,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public Map<String, RecycleItem> loadRecycleData() {
+    public synchronized Map<String, RecycleItem> loadRecycleData() {
         Map<String, RecycleItem> map = new LinkedHashMap<>();
         String sql = "SELECT * FROM recycle_data";
         try (Statement stmt = connection.createStatement();
@@ -568,7 +595,7 @@ public class SQLiteStorage implements StorageProvider {
     // ---- v1.1.2 Recycle Stock Atomic Operations ----
 
     @Override
-    public boolean addRecycleStockDelta(RecycleItem item,
+    public synchronized boolean addRecycleStockDelta(RecycleItem item,
                                          int recycledStockDelta,
                                          int totalRecycledDelta,
                                          long now) {
@@ -649,7 +676,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void saveRecycleDefinitionData(RecycleItem item) {
+    public synchronized void saveRecycleDefinitionData(RecycleItem item) {
         // 先确保记录存在（不覆盖已有运行时数据），再只更新定义字段
         String ensureSql = "INSERT OR IGNORE INTO recycle_data" +
                 " (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock)" +
@@ -679,7 +706,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void saveAllRecycleDefinitionData(Map<String, RecycleItem> items) {
+    public synchronized void saveAllRecycleDefinitionData(Map<String, RecycleItem> items) {
         String ensureSql = "INSERT OR IGNORE INTO recycle_data" +
                 " (item_id, material, base_recycle_price, total_recycled, recycle_multiplier, last_update, recycled_stock)" +
                 " VALUES (?, ?, ?, 0, 1.0, ?, 0)";
@@ -717,7 +744,7 @@ public class SQLiteStorage implements StorageProvider {
     // ---- Pressure Data (v1.1.1) ----
 
     @Override
-    public void savePressureBucket(PressureBucket bucket) {
+    public synchronized void savePressureBucket(PressureBucket bucket) {
         String sql = "INSERT OR REPLACE INTO price_pressure (item_id, bucket_start, amount, updated_at) VALUES (?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, bucket.itemId());
@@ -731,7 +758,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void saveAllPressureBuckets(String itemId, List<PressureBucket> buckets) {
+    public synchronized void saveAllPressureBuckets(String itemId, List<PressureBucket> buckets) {
         try {
             try (PreparedStatement dps = connection.prepareStatement("DELETE FROM price_pressure WHERE item_id=?")) {
                 dps.setString(1, itemId);
@@ -756,36 +783,42 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void addPressureAmount(String itemId, long bucketStart, int amountDelta, long now) {
+    public synchronized void addPressureAmount(String itemId, long bucketStart, int amountDelta, long now) {
         String update = "UPDATE price_pressure SET amount = amount + ?, updated_at = ? WHERE item_id = ? AND bucket_start = ?";
         String insert = "INSERT OR IGNORE INTO price_pressure (item_id, bucket_start, amount, updated_at) VALUES (?, ?, ?, ?)";
         try {
             boolean autoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
-            try (PreparedStatement up = connection.prepareStatement(update)) {
-                up.setInt(1, amountDelta);
-                up.setLong(2, now);
-                up.setString(3, itemId);
-                up.setLong(4, bucketStart);
-                if (up.executeUpdate() == 0) {
-                    try (PreparedStatement in = connection.prepareStatement(insert)) {
-                        in.setString(1, itemId);
-                        in.setLong(2, bucketStart);
-                        in.setInt(3, amountDelta);
-                        in.setLong(4, now);
-                        in.executeUpdate();
+            try {
+                try (PreparedStatement up = connection.prepareStatement(update)) {
+                    up.setInt(1, amountDelta);
+                    up.setLong(2, now);
+                    up.setString(3, itemId);
+                    up.setLong(4, bucketStart);
+                    if (up.executeUpdate() == 0) {
+                        try (PreparedStatement in = connection.prepareStatement(insert)) {
+                            in.setString(1, itemId);
+                            in.setLong(2, bucketStart);
+                            in.setInt(3, amountDelta);
+                            in.setLong(4, now);
+                            in.executeUpdate();
+                        }
                     }
                 }
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(autoCommit);
             }
-            connection.commit();
-            connection.setAutoCommit(autoCommit);
         } catch (SQLException e) {
             LOGGER.log(Level.WARNING, "[SQLite] 原子增加压力失败", e);
         }
     }
 
     @Override
-    public List<PressureBucket> loadPressureBuckets(String itemId) {
+    public synchronized List<PressureBucket> loadPressureBuckets(String itemId) {
         List<PressureBucket> list = new ArrayList<>();
         String sql = "SELECT * FROM price_pressure WHERE item_id=? ORDER BY bucket_start ASC";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -800,7 +833,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public Map<String, List<PressureBucket>> loadAllPressureBuckets() {
+    public synchronized Map<String, List<PressureBucket>> loadAllPressureBuckets() {
         Map<String, List<PressureBucket>> map = new LinkedHashMap<>();
         String sql = "SELECT * FROM price_pressure ORDER BY item_id, bucket_start ASC";
         try (Statement stmt = connection.createStatement();
@@ -816,7 +849,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void deleteExpiredPressureBuckets(String itemId, long cutoffTime) {
+    public synchronized void deleteExpiredPressureBuckets(String itemId, long cutoffTime) {
         String sql = "DELETE FROM price_pressure WHERE item_id=? AND bucket_start<?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setString(1, itemId);
@@ -839,7 +872,7 @@ public class SQLiteStorage implements StorageProvider {
     // ---- Mail ----
 
     @Override
-    public int saveMail(MailEntry entry) {
+    public synchronized int saveMail(MailEntry entry) {
         String sql = "INSERT INTO player_mail (player_uuid, item_data, money, message, timestamp, claimed) VALUES (?,?,?,?,?,?)";
         try (PreparedStatement ps = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             ps.setString(1, entry.getPlayerUuid().toString());
@@ -863,7 +896,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public List<MailEntry> getPlayerMail(UUID playerUuid) {
+    public synchronized List<MailEntry> getPlayerMail(UUID playerUuid) {
         List<MailEntry> list = new ArrayList<>();
         String sql = "SELECT * FROM player_mail WHERE player_uuid=? AND claimed=0 ORDER BY timestamp DESC";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -878,7 +911,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public boolean claimMail(int id) {
+    public synchronized boolean claimMail(int id) {
         String sql = "UPDATE player_mail SET claimed=1 WHERE id=? AND claimed=0";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, id);
@@ -890,7 +923,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public boolean unclaimMail(int id) {
+    public synchronized boolean unclaimMail(int id) {
         String sql = "UPDATE player_mail SET claimed=0 WHERE id=? AND claimed=1";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, id);
@@ -902,7 +935,7 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public void deleteMail(int id) {
+    public synchronized void deleteMail(int id) {
         String sql = "UPDATE player_mail SET claimed=1 WHERE id=?";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, id);
