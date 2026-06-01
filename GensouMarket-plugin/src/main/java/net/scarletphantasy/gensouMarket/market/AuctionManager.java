@@ -161,7 +161,6 @@ public class AuctionManager {
             // 记录旧竞拍信息用于退款
             final double oldPrice = auction.getCurrentPrice();
             final UUID oldBidderUuid = auction.getHighestBidderUuid();
-            final String oldBidderName = auction.getHighestBidderName();
             final boolean hadBidder = auction.hasBidder();
 
             Bukkit.getScheduler().runTask(plugin, () -> {
@@ -190,45 +189,22 @@ public class AuctionManager {
                     return;
                 }
 
-                // 异步原子出价
+                if (!vault.withdraw(bidder, amount)) {
+                    MessageUtil.send(bidder, "&c扣款失败，请稍后重试出价！");
+                    return;
+                }
+
+                final UUID bidderUuid = bidder.getUniqueId();
+                final String bidderName = bidder.getName();
+
+                // 先扣款，再异步原子出价。CAS 失败时立即退款，避免 DB 中出现未付款最高出价。
                 Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                     boolean success = storage.updateAuctionBidIfMatch(
-                            auctionId, oldPrice, amount, bidder.getUniqueId(), bidder.getName());
+                            auctionId, oldPrice, amount, bidderUuid, bidderName);
 
-                    if (!success) {
-                        // 出价失败 - 价格已变化，提示重试
-                        Bukkit.getScheduler().runTask(plugin, () -> {
-                            if (bidder.isOnline()) {
-                                MessageUtil.send(bidder, "&c出价失败，拍卖价格已变化，请重新查看后再出价！");
-                            }
-                        });
-                        return;
-                    }
-
-                    // 出价成功，回主线程处理经济操作
                     Bukkit.getScheduler().runTask(plugin, () -> {
-                        // 竞拍者离线时回滚出价，避免白嫖
-                        if (!bidder.isOnline()) {
-                            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                                // 使用乐观锁回滚：仅当价格仍为 amount 时才回滚
-                                boolean rollback = storage.updateAuctionBidIfMatch(
-                                        auctionId, amount, oldPrice, oldBidderUuid, oldBidderName);
-                                if (!rollback) {
-                                    // 回滚失败说明已有新出价，记录警告但不处理（新出价者会负责退款）
-                                    plugin.getLogger().warning("拍卖 #" + auctionId + " 出价者 " +
-                                            bidder.getName() + " 离线，回滚失败（已有新出价）");
-                                }
-                            });
-                            return;
-                        }
-
-                        if (!vault.withdraw(bidder, amount)) {
-                            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                                // 使用乐观锁回滚
-                                storage.updateAuctionBidIfMatch(
-                                        auctionId, amount, oldPrice, oldBidderUuid, oldBidderName);
-                            });
-                            MessageUtil.send(bidder, "&c扣款失败，已取消本次出价！");
+                        if (!success) {
+                            refundFailedBid(bidder, bidderUuid, amount, auctionId);
                             return;
                         }
 
@@ -271,12 +247,15 @@ public class AuctionManager {
                             }
                         }
 
-                        MessageUtil.send(bidder, "&a成功出价 &e" + MessageUtil.formatMoney(amount) + " &a在拍卖 #" + auctionId);
+                        if (bidder.isOnline()) {
+                            MessageUtil.send(bidder, "&a成功出价 &e" + MessageUtil.formatMoney(amount) +
+                                    " &a在拍卖 #" + auctionId);
+                        }
 
                         // 通知卖家
                         Player seller = Bukkit.getPlayer(auction.getSellerUuid());
                         String sellerMessage = "&a你的拍卖 #" + auctionId + " 收到新出价: &e" +
-                                MessageUtil.formatMoney(amount) + " &a来自 &e" + bidder.getName();
+                                MessageUtil.formatMoney(amount) + " &a来自 &e" + bidderName;
                         if (seller != null && seller.isOnline()) {
                             MessageUtil.send(seller, sellerMessage);
                         } else {
@@ -296,7 +275,7 @@ public class AuctionManager {
 
                         // 跨服广播出价更新（通知其他服刷新 GUI、退款、提示卖家）
                         publishIfCluster(p -> p.publishAuctionBidUpdated(auctionId, auction.getSellerUuid(),
-                                bidder.getUniqueId(), bidder.getName(),
+                                bidderUuid, bidderName,
                                 hadBidder ? oldBidderUuid : null,
                                 hadBidder ? oldPrice : 0, amount, auction.getEndTime()));
                     });
@@ -649,6 +628,38 @@ public class AuctionManager {
         cancelAllScheduledTasks();
         if (config.isAuctionEnabled()) {
             restoreActiveAuctions();
+        }
+    }
+
+    private void refundFailedBid(Player bidder, UUID bidderUuid, double amount, int auctionId) {
+        String mailMessage = "拍卖 #" + auctionId + " 出价失败，竞拍金额已退还";
+        if (bidder.isOnline()) {
+            if (vault.deposit(bidder, amount)) {
+                MessageUtil.send(bidder, "&c出价失败，拍卖价格已变化，请重新查看后再出价！已退还 &a" +
+                        MessageUtil.formatMoney(amount));
+            } else {
+                MailEntry mail = new MailEntry();
+                mail.setPlayerUuid(bidderUuid);
+                mail.setMoney(amount);
+                mail.setMessage(mailMessage);
+                saveMailAsync(mail, true, false, null);
+                MessageUtil.send(bidder, "&e出价失败且退款入账失败，金额已转入邮箱，使用 &a/gmarket collect &e领取");
+            }
+            return;
+        }
+
+        MailEntry mail = new MailEntry();
+        mail.setPlayerUuid(bidderUuid);
+        mail.setMoney(amount);
+        mail.setMessage(mailMessage);
+
+        if (plugin.isClusterEnabled()) {
+            plugin.getClusterEventPublisher().requestRemoteDeposit(
+                    bidderUuid, amount,
+                    mailMessage + ": " + MessageUtil.formatMoney(amount),
+                    ignored -> saveMailAsync(mail, true, false, null));
+        } else {
+            saveMailAsync(mail, true, false, null);
         }
     }
 

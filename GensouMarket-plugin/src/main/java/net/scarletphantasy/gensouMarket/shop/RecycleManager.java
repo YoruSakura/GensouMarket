@@ -6,8 +6,10 @@ import net.scarletphantasy.gensouMarket.config.PricingConfigResolver;
 import net.scarletphantasy.gensouMarket.config.RecyclePricingConfig;
 import net.scarletphantasy.gensouMarket.economy.EconomySnapshotService;
 import net.scarletphantasy.gensouMarket.economy.VaultHook;
+import net.scarletphantasy.gensouMarket.model.MailEntry;
 import net.scarletphantasy.gensouMarket.model.RecycleItem;
 import net.scarletphantasy.gensouMarket.storage.StorageProvider;
+import net.scarletphantasy.gensouMarket.util.ItemSerializer;
 import net.scarletphantasy.gensouMarket.util.ItemNameUtil;
 import net.scarletphantasy.gensouMarket.util.MessageUtil;
 import net.kyori.adventure.text.Component;
@@ -32,6 +34,7 @@ public class RecycleManager {
     /** v1.1.1 压力窗口管理器 */
     private final PressureWindowManager pressureWindow;
     private final Map<String, RecycleItem> recycleItems = new LinkedHashMap<>();
+    private final java.util.Set<java.util.UUID> pendingClusterRecycles = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public RecycleManager(GensouMarket plugin) {
         this.plugin = plugin;
@@ -99,13 +102,10 @@ public class RecycleManager {
      *   <li>校验物品和数量</li>
      *   <li>读取压力状态并清理过期 bucket</li>
      *   <li>用 PriceEngine 计算本次 totalEarning</li>
-     *   <li>Vault 入账</li>
-     *   <li>移除玩家物品</li>
-     *   <li>写入压力窗口</li>
-     *   <li>增加 totalRecycled 和 recycledStock</li>
-     *   <li>异步保存回收数据和压力数据</li>
+     *   <li>按运行模式结算：单服本地保存；跨服先收物品、异步写权威库、成功后付款或写邮箱</li>
+     *   <li>写入压力窗口并增加 totalRecycled/recycledStock</li>
      * </ol>
-     * 如果入账或物品移除失败，不写入压力。
+     * 如果结算失败，不写入压力。
      */
     public boolean recycleItem(Player player, RecycleItem recycleItem, int amount) {
         if (!config.isRecycleEnabled()) {
@@ -152,60 +152,78 @@ public class RecycleManager {
         PriceResult result = priceEngine.calculateBatchRecyclePrice(recycleItem, pricingConfig, ctx, amount);
         double totalEarning = result.totalPrice();
 
-        // 5. Vault 入账（失败则不写压力）
-        if (!vault.deposit(player, totalEarning)) {
-            MessageUtil.send(player, "&c入账失败，请稍后重试回收！");
-            return false;
-        }
-
-        // 6. 移除玩家物品
-        removeMaterial(player, material, amount);
-
         // ---- v1.1.2 跨服/非跨服分支 ----
         if (plugin.isClusterEnabled()) {
-            // 跨服模式：先写 MySQL 原子增量
+            // 跨服模式：先收走玩家物品作为凭据，再异步写 MySQL；写库成功后才付款。
             final int finalAmount = amount;
-            boolean dbSuccess = storage.addRecycleStockDelta(recycleItem, finalAmount, finalAmount, now);
-            if (!dbSuccess) {
-                // MySQL 写入失败：补偿 — 扣回金额并返还物品
-                plugin.getLogger().severe("[Recycle] MySQL 库存增量写入失败，尝试补偿！" +
-                        " player=" + player.getUniqueId() + " item=" + recycleItem.getId() +
-                        " amount=" + finalAmount + " earning=" + totalEarning);
-                if (!vault.withdraw(player, totalEarning)) {
-                    plugin.getLogger().severe("[Recycle] 补偿扣款失败！player=" + player.getUniqueId() +
-                            " amount=" + totalEarning);
-                }
-                ItemStack returnItem = new ItemStack(material, finalAmount);
-                java.util.HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(returnItem);
-                if (!overflow.isEmpty()) {
-                    for (ItemStack drop : overflow.values()) {
-                        player.getWorld().dropItemNaturally(player.getLocation(), drop);
-                    }
-                }
-                MessageUtil.send(player, "&c回收操作失败，物品和金额已返还！");
+            final java.util.UUID playerUuid = player.getUniqueId();
+            if (!pendingClusterRecycles.add(playerUuid)) {
+                MessageUtil.send(player, "&c已有回收操作处理中，请稍后再试。");
                 return false;
             }
 
-            // MySQL 成功：合并本地内存
-            recycleItem.addRecycled(finalAmount);
-            recycleItem.addRecycledStock(finalAmount);
-            recycleItem.setLastUpdate(now);
+            if (countMaterial(player, material) < finalAmount) {
+                pendingClusterRecycles.remove(playerUuid);
+                MessageUtil.send(player, "&c回收操作已取消：物品数量发生变化，请重新打开回收站。");
+                return false;
+            }
 
-            // 写入压力窗口（库存增量成功后才写入）
-            int newActiveVolume = pressureWindow.recordRecycle(recycleItem.getId(), pricingConfig, finalAmount, now);
+            removeMaterial(player, material, finalAmount);
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                boolean dbSuccess = storage.addRecycleStockDelta(recycleItem, finalAmount, finalAmount, now);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    boolean rewardHandled = false;
+                    try {
+                        if (!dbSuccess) {
+                            returnRecycleItems(player, playerUuid, material, finalAmount,
+                                    "&c回收操作失败，物品已退回，请稍后重试！");
+                            return;
+                        }
 
-            // 跨服压力同步
-            long bucketMillis = pricingConfig.bucketSeconds() * 1000L;
-            if (bucketMillis <= 0) bucketMillis = 60_000L;
-            long bucketStart = (now / bucketMillis) * bucketMillis;
-            plugin.getClusterEventPublisher().publishPressureSync(
-                    recycleItem.getId(), bucketStart, finalAmount, newActiveVolume, now);
+                        deliverRecycleReward(player, playerUuid, totalEarning, recycleItem, finalAmount, result);
+                        rewardHandled = true;
 
-            // 跨服库存同步
-            plugin.getClusterEventPublisher().publishRecycleStockSync(
-                    recycleItem.getId(), finalAmount, finalAmount, now, "recycle");
+                        // MySQL 和玩家资产均成功：合并本地内存
+                        recycleItem.addRecycled(finalAmount);
+                        recycleItem.addRecycledStock(finalAmount);
+                        recycleItem.setLastUpdate(now);
+
+                        // 写入压力窗口
+                        int newActiveVolume = pressureWindow.recordRecycle(recycleItem.getId(), pricingConfig, finalAmount, now);
+
+                        // 跨服压力同步
+                        long bucketMillis = pricingConfig.bucketSeconds() * 1000L;
+                        if (bucketMillis <= 0) bucketMillis = 60_000L;
+                        long bucketStart = (now / bucketMillis) * bucketMillis;
+                        plugin.getClusterEventPublisher().publishPressureSync(
+                                recycleItem.getId(), bucketStart, finalAmount, newActiveVolume, now);
+
+                        // 跨服库存同步
+                        plugin.getClusterEventPublisher().publishRecycleStockSync(
+                                recycleItem.getId(), finalAmount, finalAmount, now, "recycle");
+                    } catch (RuntimeException ex) {
+                        if (dbSuccess && !rewardHandled) {
+                            saveRecycleMoneyMailAsync(playerUuid, totalEarning,
+                                    "回收 " + finalAmount + "x " + recycleItem.getMaterial().name() + " 的金币");
+                        }
+                        throw ex;
+                    } finally {
+                        pendingClusterRecycles.remove(playerUuid);
+                    }
+                });
+            });
+            return true;
         } else {
             // 非跨服模式：按原本本地保存路径处理
+
+            // 5. Vault 入账（失败则不写压力）
+            if (!vault.deposit(player, totalEarning)) {
+                MessageUtil.send(player, "&c入账失败，请稍后重试回收！");
+                return false;
+            }
+
+            // 6. 移除玩家物品
+            removeMaterial(player, material, amount);
 
             // 7. 写入压力窗口（入账和移除成功后才写入）
             pressureWindow.recordRecycle(recycleItem.getId(), pricingConfig, amount, now);
@@ -220,6 +238,12 @@ public class RecycleManager {
         }
 
         // 发送消息
+        sendRecycleSuccess(player, recycleItem, amount, totalEarning, result);
+        return true;
+    }
+
+    private void sendRecycleSuccess(Player player, RecycleItem recycleItem, int amount,
+                                    double totalEarning, PriceResult result) {
         MessageUtil.send(player, Component.text("成功回收 ", NamedTextColor.GREEN)
                 .append(Component.text(amount + "x ", NamedTextColor.YELLOW))
                 .append(ItemNameUtil.getLocalizedName(recycleItem.getMaterial()).color(NamedTextColor.YELLOW))
@@ -228,7 +252,81 @@ public class RecycleManager {
                 .append(Component.text(" (均价: ", NamedTextColor.GREEN))
                 .append(Component.text(MessageUtil.formatMoney(result.averagePrice()), NamedTextColor.YELLOW))
                 .append(Component.text(")", NamedTextColor.GREEN)));
-        return true;
+    }
+
+    private void deliverRecycleReward(Player player, java.util.UUID playerUuid, double totalEarning,
+                                      RecycleItem recycleItem, int amount, PriceResult result) {
+        if (player.isOnline()) {
+            if (vault.deposit(player, totalEarning)) {
+                sendRecycleSuccess(player, recycleItem, amount, totalEarning, result);
+                return;
+            }
+            saveRecycleMoneyMailAsync(playerUuid, totalEarning,
+                    "回收 " + amount + "x " + recycleItem.getMaterial().name() + " 的金币");
+            MessageUtil.send(player, "&e回收成功，但金币入账失败，已转入邮箱，使用 &a/gmarket collect &e领取");
+            return;
+        }
+
+        String message = "回收 " + amount + "x " + recycleItem.getMaterial().name() + " 的金币";
+        if (plugin.isClusterEnabled()) {
+            plugin.getClusterEventPublisher().requestRemoteDeposit(
+                    playerUuid, totalEarning,
+                    message + ": " + MessageUtil.formatMoney(totalEarning),
+                    ignored -> saveRecycleMoneyMailAsync(playerUuid, totalEarning, message));
+        } else {
+            saveRecycleMoneyMailAsync(playerUuid, totalEarning, message);
+        }
+    }
+
+    private void returnRecycleItems(Player player, java.util.UUID playerUuid, Material material,
+                                    int amount, String onlineMessage) {
+        ItemStack returnItem = new ItemStack(material, amount);
+        if (player.isOnline()) {
+            java.util.HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(returnItem);
+            if (!overflow.isEmpty()) {
+                for (ItemStack drop : overflow.values()) {
+                    player.getWorld().dropItemNaturally(player.getLocation(), drop);
+                }
+            }
+            MessageUtil.send(player, onlineMessage);
+            return;
+        }
+
+        String message = "回收操作失败，物品已退回";
+        if (plugin.isClusterEnabled()) {
+            plugin.getClusterEventPublisher().requestRemoteGiveItem(
+                    playerUuid, ItemSerializer.serialize(returnItem), message,
+                    ignored -> saveRecycleItemMailAsync(playerUuid, returnItem, message));
+        } else {
+            saveRecycleItemMailAsync(playerUuid, returnItem, message);
+        }
+    }
+
+    private void saveRecycleMoneyMailAsync(java.util.UUID playerUuid, double amount, String message) {
+        MailEntry mail = new MailEntry();
+        mail.setPlayerUuid(playerUuid);
+        mail.setMoney(amount);
+        mail.setMessage(message);
+        saveRecycleMailAsync(mail, true, false);
+    }
+
+    private void saveRecycleItemMailAsync(java.util.UUID playerUuid, ItemStack itemStack, String message) {
+        MailEntry mail = new MailEntry();
+        mail.setPlayerUuid(playerUuid);
+        mail.setItemStack(itemStack);
+        mail.setItemData(ItemSerializer.serialize(itemStack));
+        mail.setMessage(message);
+        saveRecycleMailAsync(mail, false, true);
+    }
+
+    private void saveRecycleMailAsync(MailEntry mail, boolean hasMoney, boolean hasItem) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            storage.saveMail(mail);
+            if (plugin.isClusterEnabled()) {
+                plugin.getClusterEventPublisher().publishMailCreated(
+                        mail.getPlayerUuid(), hasMoney, hasItem, mail.getMessage());
+            }
+        });
     }
 
     private int countMaterial(Player player, Material material) {
