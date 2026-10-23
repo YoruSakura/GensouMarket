@@ -5,14 +5,14 @@ plugins {
 }
 
 group = 'net.scarletphantasy'
-version = '1.2.1'
+version = '1.2.3'
 
 def targetJavaVersion = 21
 def paperBaselineApiVersion = providers.gradleProperty("paperBaselineApiVersion")
         .orElse("1.21-R0.1-SNAPSHOT")
         .get()
 def paperLatestApiVersion = providers.gradleProperty("paperLatestApiVersion")
-        .orElse("26.1.2.build.65-stable")
+        .orElse("26.3.build.205-stable")
         .get()
 def paperLatestApiJavaVersion = providers.gradleProperty("paperLatestApiJavaVersion")
         .orElse("25")
@@ -22,6 +22,17 @@ def paperRunMinecraftVersion = providers.gradleProperty("paperRunMinecraftVersio
         .orElse("1.21")
         .get()
 def jetbrainsAnnotationsVersion = "26.0.2"
+
+// Published Paper API lines inside the supported Minecraft 1.21–26.3 interval.
+// The official metadata skips 1.21.2 and 26.1; use their next published Paper release lines.
+// The final published 26.1.1 API is alpha; include it as a compatibility probe, not a stable recommendation.
+def paperIntermediateApiVersions = [
+        "1.21.1-R0.1-SNAPSHOT", "1.21.3-R0.1-SNAPSHOT", "1.21.4-R0.1-SNAPSHOT",
+        "1.21.5-R0.1-SNAPSHOT", "1.21.6-R0.1-SNAPSHOT", "1.21.7-R0.1-SNAPSHOT",
+        "1.21.8-R0.1-SNAPSHOT", "1.21.9-R0.1-SNAPSHOT", "1.21.10-R0.1-SNAPSHOT",
+        "1.21.11-R0.1-SNAPSHOT", "26.1.1.build.29-alpha", "26.1.2.build.74-stable",
+        "26.2.build.134-stable"
+]
 
 repositories {
     mavenCentral()
@@ -36,13 +47,25 @@ repositories {
 }
 
 configurations {
+    paperCompatibilityCommon {
+        canBeConsumed = false
+        canBeResolved = false
+    }
     paperLatestApiCompileClasspath {
         canBeConsumed = false
         canBeResolved = true
+        extendsFrom(paperCompatibilityCommon)
     }
 }
 
 dependencies {
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testImplementation("org.mockito:mockito-core:5.14.2")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation("io.papermc.paper:paper-api:${paperBaselineApiVersion}")
+    testImplementation("com.github.MilkBowl:VaultAPI:1.7.1")
+    testRuntimeOnly("org.xerial:sqlite-jdbc:3.47.2.0")
+
     // Keep the shipped jar compiled against the oldest supported Paper API.
     compileOnly("io.papermc.paper:paper-api:${paperBaselineApiVersion}")
     compileOnly("org.jetbrains:annotations:${jetbrainsAnnotationsVersion}")
@@ -52,14 +75,14 @@ dependencies {
     }
     implementation("com.zaxxer:HikariCP:6.2.1")
 
-    // Optional verification classpath for the latest Paper API line.
+    // Verification classpaths are isolated from the shipped baseline API.
     paperLatestApiCompileClasspath("io.papermc.paper:paper-api:${paperLatestApiVersion}")
-    paperLatestApiCompileClasspath("org.jetbrains:annotations:${jetbrainsAnnotationsVersion}")
-    paperLatestApiCompileClasspath("com.github.MilkBowl:VaultAPI:1.7.1")
-    paperLatestApiCompileClasspath("com.github.Zrips:CMI-API:9.8.6.4") {
+    paperCompatibilityCommon("org.jetbrains:annotations:${jetbrainsAnnotationsVersion}")
+    paperCompatibilityCommon("com.github.MilkBowl:VaultAPI:1.7.1")
+    paperCompatibilityCommon("com.github.Zrips:CMI-API:9.8.6.4") {
         transitive = false
     }
-    paperLatestApiCompileClasspath("com.zaxxer:HikariCP:6.2.1")
+    paperCompatibilityCommon("com.zaxxer:HikariCP:6.2.1")
 }
 
 tasks {
@@ -110,11 +133,70 @@ tasks.register("compilePaperLatestApiJava", JavaCompile) {
     }
 }
 
+sourceSets {
+    compatibility {
+        java.srcDir("src/compatibility/java")
+    }
+}
+
+def compatibilityClasspaths = [
+        (paperBaselineApiVersion): configurations.compileClasspath,
+        (paperLatestApiVersion): configurations.paperLatestApiCompileClasspath
+]
+def intermediateCompatibilityTasks = paperIntermediateApiVersions.collect { apiVersion ->
+    def taskSuffix = apiVersion.replaceAll("[^A-Za-z0-9]", "_")
+    def apiClasspath = configurations.create("paperApi${taskSuffix}CompileClasspath") {
+        canBeConsumed = false
+        canBeResolved = true
+        extendsFrom(configurations.paperCompatibilityCommon)
+    }
+    dependencies.add(apiClasspath.name, "io.papermc.paper:paper-api:${apiVersion}")
+    compatibilityClasspaths[apiVersion] = apiClasspath
+    tasks.register("compilePaperApi${taskSuffix}Java", JavaCompile) {
+        group = "verification"
+        description = "Compiles the plugin against Paper API ${apiVersion}."
+        source = sourceSets.main.java
+        classpath = apiClasspath
+        destinationDirectory = layout.buildDirectory.dir("classes/java/paperCompatibility/${taskSuffix}")
+        options.release.set(apiVersion.startsWith("1.") ? targetJavaVersion : paperLatestApiJavaVersion)
+        javaCompiler = javaToolchains.compilerFor {
+            languageVersion = JavaLanguageVersion.of(apiVersion.startsWith("1.") ? targetJavaVersion : paperLatestApiJavaVersion)
+        }
+    }
+}
+
+tasks.register("verifyPaperBaselineLinkage", JavaExec) {
+    group = "verification"
+    description = "Checks that the shipped Java 21 bytecode still links against every selected Paper API."
+    dependsOn(tasks.named("compileJava"), tasks.named("compatibilityClasses"))
+    classpath = sourceSets.compatibility.runtimeClasspath
+    mainClass = "ApiLinkageCheck"
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+    }
+    inputs.files(sourceSets.main.output.classesDirs)
+    compatibilityClasspaths.each { apiVersion, apiClasspath -> inputs.files(apiClasspath) }
+    doFirst {
+        def arguments = [tasks.named("compileJava").get().destinationDirectory.get().asFile.absolutePath]
+        compatibilityClasspaths.each { apiVersion, apiClasspath ->
+            arguments.add(apiVersion)
+            arguments.add(apiClasspath.asPath)
+        }
+        setArgs(arguments)
+    }
+}
+
 tasks.register("checkPaperApiCompatibility") {
     group = "verification"
-    description = "Checks the plugin against the baseline Paper API and the latest Paper API."
+    description = "Checks every published Paper API release line in the Minecraft 1.21–26.3 interval."
     dependsOn(tasks.named("compileJava"))
     dependsOn(tasks.named("compilePaperLatestApiJava"))
+    dependsOn(intermediateCompatibilityTasks)
+    dependsOn(tasks.named("verifyPaperBaselineLinkage"))
+}
+
+tasks.named("check") {
+    dependsOn(tasks.named("checkPaperApiCompatibility"))
 }
 
 processResources {
@@ -124,4 +206,8 @@ processResources {
     filesMatching('plugin.yml') {
         expand props
     }
+}
+
+tasks.named("test") {
+    useJUnitPlatform()
 }

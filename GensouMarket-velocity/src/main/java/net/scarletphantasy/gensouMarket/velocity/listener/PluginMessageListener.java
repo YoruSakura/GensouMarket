@@ -40,11 +40,9 @@ public class PluginMessageListener {
     public void onPluginMessage(PluginMessageEvent event) {
         if (!channelId.equals(event.getIdentifier())) return;
 
-        // 只处理来自后端服的消息
-        if (!(event.getSource() instanceof ServerConnection connection)) return;
-
-        // 标记消息已处理，不再转发给客户端
+        // 此通道只接受后端消息；先阻止客户端消息被 Velocity 默认转发。
         event.setResult(PluginMessageEvent.ForwardResult.handled());
+        if (!(event.getSource() instanceof ServerConnection connection)) return;
 
         IncomingPacket packet;
         try {
@@ -59,6 +57,18 @@ public class PluginMessageListener {
 
         logger.debug("收到消息: type={}, source={}, requestId={}",
                 packet.type(), packet.sourceServerId(), packet.requestId());
+
+        String connectionName = connection.getServerInfo().getName();
+        // 第一条业务消息可能早于延迟 HELLO；仍只按真实后端连接建立绑定。
+        if (packet.type() != PacketType.SERVER_HELLO && packet.type() != PacketType.SERVER_GOODBYE
+                && backendRegistry.getServerId(connectionName) == null) {
+            backendRegistry.register(packet.sourceServerId(), connection.getServer());
+        }
+        if (packet.type() != PacketType.SERVER_HELLO
+                && !packet.sourceServerId().equals(backendRegistry.getServerId(connectionName))) {
+            logger.warn("拒绝来源与连接不匹配的消息: {} ({})", packet.sourceServerId(), connection.getServerInfo().getName());
+            return;
+        }
 
         switch (packet.type()) {
             case SERVER_HELLO -> handleServerHello(packet, connection);

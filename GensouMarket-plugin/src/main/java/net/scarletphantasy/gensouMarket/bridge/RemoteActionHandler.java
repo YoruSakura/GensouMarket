@@ -156,7 +156,7 @@ public class RemoteActionHandler {
     private void handleRemoteDeposit(IncomingPacket packet) {
         UUID targetUuid = parseUuid(packet.payload().get("targetPlayerUuid"));
         double amount = parseDouble(packet.payload().get("amount"), 0);
-        if (targetUuid == null || amount <= 0) {
+        if (targetUuid == null || !Double.isFinite(amount) || amount <= 0) {
             plugin.getProxyBridge().sendFail(packet.requestId(), packet.sourceServerId(), "invalid remote deposit payload");
             return;
         }

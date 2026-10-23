@@ -30,6 +30,7 @@ public final class AuctionGui {
     }
 
     public static void openAuctions(GensouMarket plugin, Player player, List<Auction> auctions, int page) {
+        if (!MessageUtil.requirePermission(player, "gensoumarket.auction")) return;
 
         GuiHolder holder = new GuiHolder(GuiHolder.GuiType.AUCTION_LIST);
         holder.setData("page", page);
@@ -83,6 +84,7 @@ public final class AuctionGui {
     }
 
     public static void openAuctionDetail(GensouMarket plugin, Player player, Auction auction) {
+        if (!MessageUtil.requirePermission(player, "gensoumarket.auction")) return;
         GuiHolder holder = new GuiHolder(GuiHolder.GuiType.AUCTION_DETAIL);
         holder.setData("auctionId", auction.getId());
         holder.setData("auction", auction);

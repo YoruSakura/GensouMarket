@@ -39,6 +39,7 @@ public final class RecycleGui {
     private RecycleGui() {}
 
     public static void openRecycle(GensouMarket plugin, Player player, int page) {
+        if (!MessageUtil.requirePermission(player, "gensoumarket.recycle")) return;
         Map<String, RecycleItem> items = plugin.getRecycleManager().getRecycleItems();
         List<RecycleItem> itemList = new ArrayList<>(items.values());
 

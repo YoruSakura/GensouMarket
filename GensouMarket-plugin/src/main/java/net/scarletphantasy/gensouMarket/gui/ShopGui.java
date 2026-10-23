@@ -29,6 +29,17 @@ public final class ShopGui {
     private ShopGui() {}
 
     public static void openShop(GensouMarket plugin, Player player, int page) {
+        if (!MessageUtil.requirePermission(player, "gensoumarket.shop")) return;
+        Inventory previous = player.getOpenInventory().getTopInventory();
+        plugin.getShopManager().refreshFixedStocks(() -> {
+            if (player.isOnline() && player.getOpenInventory().getTopInventory() == previous) {
+                renderShop(plugin, player, page);
+            }
+        });
+    }
+
+    private static void renderShop(GensouMarket plugin, Player player, int page) {
+        if (!MessageUtil.requirePermission(player, "gensoumarket.shop")) return;
         Map<String, ShopItem> items = plugin.getShopManager().getShopItems();
         List<ShopItem> itemList = new ArrayList<>(items.values());
 

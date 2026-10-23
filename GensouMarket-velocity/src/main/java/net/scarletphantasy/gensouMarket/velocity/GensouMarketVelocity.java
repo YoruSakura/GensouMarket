@@ -21,7 +21,7 @@ import java.nio.file.Path;
 @Plugin(
         id = "gensoumarket-velocity",
         name = "GensouMarket-Velocity",
-        version = "1.2.1",
+        version = "1.2.3",
         description = "GensouMarket 跨服消息路由代理端",
         authors = {"ScarletPhantasy"}
 )

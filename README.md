@@ -4,9 +4,20 @@ GensouMarket 是一个面向 Minecraft 服务器的经济交易插件，提供�
 
 | 项目 | 信息 |
 | --- | --- |
+| 🏷️ 当前版本 | [1.2.3](https://github.com/YoruSakura/GensouMarket/releases/tag/v1.2.3) |
 | 🧭 主命令 | `/gmarket` |
 | 🧩 完整命令 | `/gensoumarket` |
 | 📦 下载 | <https://github.com/YoruSakura/GensouMarket/releases> |
+
+## 🆕 1.2.3 更新
+
+- 修复面对面交易的界面物品同步、确认和取消返还，限制拖拽及双击收集对展示物品的操作。
+- 补齐菜单、个人商店牌子和业务入口的权限检查，拒绝无效金额；管理员下架商品或取消拍卖时，物品退还原卖家。
+- 固定限量商品通过共享数据库扣减库存，保存配置及重启时保留已有库存；拍卖出价和取消同时核对价格与出价者。
+- 回收失败时保留退回物品的原始数据；存储初始化失败时停止初始化，避免进入未就绪状态。
+- 加固 Velocity 消息来源、后端 ID 注册及消息发送结果检查，支持同机共享 SQLite 的轻量跨服部署。
+
+本版已通过 33 项回归测试和 15 条 Paper API 版本线的兼容检查。联机测试使用 Paper 26.1.2，满背包交易成交与取消已完成人工确认；兼容范围内的其他版本尚未逐一进行真服验证。
 
 ## ✨ 功能一览
 
@@ -111,11 +122,13 @@ GUI 中左键回收 1 个，右键回收一组。价格变化较大时，插件�
 
 ### 📬 邮件领取
 
-商品售出、拍卖结算、跨服结算或背包无法直接接收物品时，可以使用：
+商品售出、拍卖结算和跨服结算可以直接向在线玩家交付款项或物品；存在待领取邮件时，使用：
 
 ```text
 /gmarket collect
 ```
+
+在线玩家已直接收到的钱物无需再次领取。背包满时，直接交付的物品可能掉落在玩家脚下，请及时拾取。
 
 ## 📈 动态价格
 
@@ -150,28 +163,38 @@ Velocity 群组服可以在子服之间同步动态价格所需的数据，让�
 
 ### ✅ 基础要求
 
-- Paper 服务端
-- Java 运行环境
-- Vault
-- 一个支持 Vault 的经济插件
+当前 1.2.3 的服务端兼容目标为 **Paper 1.21–26.3**，使用同一份插件 jar：
 
-具体支持的服务端和运行环境以对应 Release 说明为准。
+| 服务端版本 | Java 运行环境 | 支持情况 |
+| --- | --- | --- |
+| Paper 1.21–1.21.11 | Java 21 | 已通过 API 编译和字节码成员检查 |
+| Paper 26.1–26.3 | Java 25 | 已通过 API 编译和字节码成员检查 |
+| Spigot | — | 当前不支持，插件使用了 Paper 的文本和 GUI API |
+
+版本范围按 Paper 实际发布的版本计算。上述检查覆盖 15 条 API 版本线，尚未完成逐版本服务器联机实测；已发布版本以对应 Release 说明为准。Java 要求见 [Paper 官方安装说明](https://docs.papermc.io/paper/getting-started/)。
+
+此外需要安装 Vault 和一个支持 Vault 的经济插件，并确认实际注册了可用的 Economy 服务。CMI 是可选经济实现，使用时按其版本检查依赖和 Vault 桥接。
+
+跨服部署还需要一个能同步玩家**背包和金钱**的外部插件。GensouMarket 的共享业务库和 Velocity 消息负责交易状态，玩家资产同步由所选外部插件提供。各子服应使用相同的 Minecraft 版本；插件能在不同版本运行，不代表新版本物品数据能被旧版本读取。
 
 ### 📥 下载文件
 
-从 GitHub Releases 页面下载所需文件：<https://github.com/YoruSakura/GensouMarket/releases>
+从 [1.2.3 Release](https://github.com/YoruSakura/GensouMarket/releases/tag/v1.2.3) 下载所需文件：
+
+后续正式版和测试版只提供可直接部署的 jar 文件。
 
 | 文件 | 放在哪里 |
 | --- | --- |
-| Paper 插件 jar | Paper 子服的 `plugins` 文件夹 |
-| Velocity 插件 jar | Velocity 的 `plugins` 文件夹，跨服模式才需要 |
-| SHA256 校验文件 | 用于校验下载文件 |
+| [GensouMarket-plugin-1.2.3.jar](https://github.com/YoruSakura/GensouMarket/releases/download/v1.2.3/GensouMarket-plugin-1.2.3.jar) | Paper 子服的 `plugins` 文件夹 |
+| [GensouMarket-velocity-1.2.3.jar](https://github.com/YoruSakura/GensouMarket/releases/download/v1.2.3/GensouMarket-velocity-1.2.3.jar) | Velocity 代理的 `plugins` 文件夹，跨服模式才需要 |
+
+单服只需 Paper 插件；跨服部署时，两端同时使用本次发布的对应 jar。
 
 ### 🖥️ 单服安装
 
 1. 把 Paper 插件 jar 放进 Paper 服务器的 `plugins` 文件夹。
-2. 确保已经安装 Vault 和经济插件。
-3. 重启服务器。
+2. 同时准备 Vault 和经济插件，按所选版本安装必要依赖。
+3. 重启服务器，确认 Vault 和经济插件实际启用，且 Vault 已取得可用的 Economy 服务。
 4. 首次启动后会生成 `config.yml`、`shop.yml`、`recycle.yml` 等配置。
 5. 修改配置后执行 `/gmarket reload`。
 
@@ -181,15 +204,25 @@ Velocity 群组服可以在子服之间同步动态价格所需的数据，让�
 
 1. 每个 Paper 子服都安装 Paper 插件 jar。
 2. Velocity 代理端安装 Velocity 插件 jar。
-3. 所有子服使用同一个 MySQL 数据库，或在同一系统用户下共享同一个本地 SQLite 文件。
-4. 每个子服在 `config.yml` 中设置：
+3. 每个子服准备 Vault、可用经济实现及外部背包/金钱同步插件，确认所需模块启用、账户和物品能往返同步。
+4. 所有子服的市场业务数据使用同一个 MySQL 数据库，或在同一系统用户下共享同一个本地 SQLite 文件；玩家同步插件按自身文档配置，无需和市场共用同一套表或文件。
+5. 每个子服在 `config.yml` 中设置：
    - `storage.type: mysql`，或 `storage.type: sqlite` 并让 `storage.sqlite.path` 指向同一个绝对路径
    - `cluster.enabled: true`
    - 唯一的 `cluster.server-id`
    - 与 Velocity 端一致的 `cluster.channel`
-5. 重启 Velocity 和所有 Paper 子服。
+6. 重启 Velocity 和所有 Paper 子服，核对实际启用状态、经济服务、后端注册及同步功能。
 
 跨服生产环境推荐 MySQL。SQLite 跨服仅建议用于同机、同系统用户、同一本地数据库文件的轻量部署。升级或替换插件时，Paper 主插件和 Velocity 插件请来自同一次发布。
+
+玩家资产同步由所选外部插件负责。部署时应核对玩家往返切服后的余额、背包及交易返还是否正常保存。
+
+### 🔄 从旧版本升级
+
+1. 停止 Paper 子服及 Velocity 代理，备份配置和业务数据库。
+2. 用本次发布的对应 jar 替换旧 jar，每端只保留一份 GensouMarket 插件。
+3. 保留现有配置和数据库；插件启动时执行必要的数据与配置升级。
+4. 启动后确认存储和经济服务初始化成功；跨服模式还需确认各子服注册正常、`server-id` 唯一。
 
 ## ⚙️ 配置文件
 

@@ -29,15 +29,17 @@ public class VaultHook {
     }
 
     public boolean has(OfflinePlayer player, double amount) {
-        return economy.has(player, amount);
+        return economy != null && Double.isFinite(amount) && amount >= 0 && economy.has(player, amount);
     }
 
     public boolean withdraw(OfflinePlayer player, double amount) {
+        if (economy == null || !Double.isFinite(amount) || amount < 0) return false;
         EconomyResponse resp = economy.withdrawPlayer(player, amount);
         return resp.transactionSuccess();
     }
 
     public boolean deposit(OfflinePlayer player, double amount) {
+        if (economy == null || !Double.isFinite(amount) || amount < 0) return false;
         EconomyResponse resp = economy.depositPlayer(player, amount);
         return resp.transactionSuccess();
     }

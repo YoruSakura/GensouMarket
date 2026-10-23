@@ -24,13 +24,25 @@ public class BackendRegistry {
         this.logger = logger;
     }
 
-    public void register(String serverId, RegisteredServer server) {
+    public synchronized void register(String serverId, RegisteredServer server) {
+        if (serverId == null || serverId.isBlank() || "velocity".equalsIgnoreCase(serverId)) {
+            logger.warn("拒绝无效后端 ID: {}", serverId);
+            return;
+        }
+        String serverName = server.getServerInfo().getName();
+        RegisteredServer existing = backends.get(serverId);
+        if (existing != null && !existing.getServerInfo().getName().equals(serverName)) {
+            logger.warn("拒绝重复后端 ID: {} ({})", serverId, serverName);
+            return;
+        }
+        String previousId = serverNameToId.get(serverName);
+        if (previousId != null && !previousId.equals(serverId)) backends.remove(previousId);
         backends.put(serverId, server);
         serverNameToId.put(server.getServerInfo().getName(), serverId);
         logger.info("后端服已注册: {} ({})", serverId, server.getServerInfo().getName());
     }
 
-    public void unregister(String serverId) {
+    public synchronized void unregister(String serverId) {
         RegisteredServer removed = backends.remove(serverId);
         if (removed != null) {
             serverNameToId.remove(removed.getServerInfo().getName());
@@ -41,7 +53,7 @@ public class BackendRegistry {
     /**
      * 根据 Velocity 的 RegisteredServer name 注销（用于服务器断连）。
      */
-    public void unregisterByServerName(String serverName) {
+    public synchronized void unregisterByServerName(String serverName) {
         String serverId = serverNameToId.remove(serverName);
         if (serverId != null) {
             backends.remove(serverId);

@@ -136,7 +136,7 @@ public class SQLiteStorage implements StorageProvider {
     /**
      * 对旧版数据库补齐 task-05 新增列。SQLite 不支持 ADD COLUMN IF NOT EXISTS，用 try-catch 逐列检查。
      */
-    private void migrateSchema() {
+    private void migrateSchema() throws SQLException {
         addColumnIfMissing("shop_data", "mode", "TEXT NOT NULL DEFAULT 'FIXED'");
         addColumnIfMissing("shop_data", "stock_mode", "TEXT NOT NULL DEFAULT 'UNLIMITED'");
         addColumnIfMissing("shop_data", "available_stock", "INTEGER NOT NULL DEFAULT -1");
@@ -144,21 +144,23 @@ public class SQLiteStorage implements StorageProvider {
         addColumnIfMissing("recycle_data", "recycled_stock", "INTEGER NOT NULL DEFAULT 0");
     }
 
-    private void addColumnIfMissing(String table, String column, String definition) {
+    private boolean hasColumn(String table, String column) throws SQLException {
         try (Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery("PRAGMA table_info(" + table + ")")) {
             while (rs.next()) {
-                if (column.equalsIgnoreCase(rs.getString("name"))) return;
+                if (column.equalsIgnoreCase(rs.getString("name"))) return true;
             }
-        } catch (SQLException e) {
-            LOGGER.log(Level.WARNING, "[SQLite] 检查 " + table + "." + column + " 失败", e);
-            return;
+            return false;
         }
+    }
+
+    private void addColumnIfMissing(String table, String column, String definition) throws SQLException {
+        if (hasColumn(table, column)) return;
         try (Statement stmt = connection.createStatement()) {
             stmt.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
             LOGGER.info("[SQLite] 已补齐列 " + table + "." + column);
         } catch (SQLException e) {
-            LOGGER.log(Level.WARNING, "[SQLite] 添加 " + table + "." + column + " 失败", e);
+            if (!hasColumn(table, column)) throw e;
         }
     }
 
@@ -372,16 +374,20 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public synchronized boolean updateAuctionBidIfMatch(int auctionId, double expectedCurrentPrice,
+    public synchronized boolean updateAuctionBidIfMatch(int auctionId, double expectedCurrentPrice, UUID expectedBidderUuid,
                                             double newPrice, UUID newBidderUuid, String newBidderName) {
         String sql = "UPDATE auctions SET current_price=?, highest_bidder_uuid=?, highest_bidder_name=? " +
-                     "WHERE id=? AND status='ACTIVE' AND current_price=?";
+                     "WHERE id=? AND status='ACTIVE' AND current_price=? " +
+                     "AND (highest_bidder_uuid=? OR (highest_bidder_uuid IS NULL AND ? IS NULL))";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setDouble(1, newPrice);
             ps.setString(2, newBidderUuid.toString());
             ps.setString(3, newBidderName);
             ps.setInt(4, auctionId);
             ps.setDouble(5, expectedCurrentPrice);
+            String expectedBidder = expectedBidderUuid == null ? null : expectedBidderUuid.toString();
+            ps.setString(6, expectedBidder);
+            ps.setString(7, expectedBidder);
             return ps.executeUpdate() == 1;
         } catch (SQLException e) {
             LOGGER.log(Level.WARNING, "[SQLite] 原子更新拍卖出价失败", e);
@@ -402,10 +408,15 @@ public class SQLiteStorage implements StorageProvider {
     }
 
     @Override
-    public synchronized boolean markAuctionCancelledIfActive(int auctionId) {
-        String sql = "UPDATE auctions SET status='CANCELLED' WHERE id=? AND status='ACTIVE'";
+    public synchronized boolean markAuctionCancelledIfMatch(int auctionId, double expectedPrice, UUID expectedBidderUuid) {
+        String sql = "UPDATE auctions SET status='CANCELLED' WHERE id=? AND status='ACTIVE' AND current_price=? " +
+                "AND (highest_bidder_uuid=? OR (highest_bidder_uuid IS NULL AND ? IS NULL))";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             ps.setInt(1, auctionId);
+            ps.setDouble(2, expectedPrice);
+            String expectedBidder = expectedBidderUuid == null ? null : expectedBidderUuid.toString();
+            ps.setString(3, expectedBidder);
+            ps.setString(4, expectedBidder);
             return ps.executeUpdate() == 1;
         } catch (SQLException e) {
             LOGGER.log(Level.WARNING, "[SQLite] 原子标记拍卖取消失败", e);
@@ -431,7 +442,7 @@ public class SQLiteStorage implements StorageProvider {
         return a;
     }
 
-    private void migrateShopToRecycle() {
+    private void migrateShopToRecycle() throws SQLException {
         try {
             boolean recycleEmpty;
             try (Statement stmt = connection.createStatement();
@@ -451,7 +462,7 @@ public class SQLiteStorage implements StorageProvider {
                 }
             }
         } catch (SQLException e) {
-            LOGGER.log(Level.WARNING, "[SQLite] shop_data 迁移失败", e);
+            throw e;
         }
     }
 
@@ -459,7 +470,11 @@ public class SQLiteStorage implements StorageProvider {
 
     @Override
     public synchronized void saveShopData(ShopItem item) {
-        String sql = "INSERT OR REPLACE INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
+        String sql = "INSERT INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) " +
+                "ON CONFLICT(item_id) DO UPDATE SET material=excluded.material, base_buy_price=excluded.base_buy_price, " +
+                "total_bought=excluded.total_bought, last_update=excluded.last_update, mode=excluded.mode, stock_mode=excluded.stock_mode, " +
+                "available_stock=CASE WHEN shop_data.available_stock < 0 THEN excluded.available_stock ELSE shop_data.available_stock END, " +
+                "recycle_source_id=excluded.recycle_source_id, sell_multiplier=excluded.sell_multiplier";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             bindShopItem(ps, item);
             ps.executeUpdate();
@@ -470,7 +485,11 @@ public class SQLiteStorage implements StorageProvider {
 
     @Override
     public synchronized void saveAllShopData(Map<String, ShopItem> items) {
-        String sql = "INSERT OR REPLACE INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
+        String sql = "INSERT INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) " +
+                "ON CONFLICT(item_id) DO UPDATE SET material=excluded.material, base_buy_price=excluded.base_buy_price, " +
+                "total_bought=excluded.total_bought, last_update=excluded.last_update, mode=excluded.mode, stock_mode=excluded.stock_mode, " +
+                "available_stock=CASE WHEN shop_data.available_stock < 0 THEN excluded.available_stock ELSE shop_data.available_stock END, " +
+                "recycle_source_id=excluded.recycle_source_id, sell_multiplier=excluded.sell_multiplier";
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
             for (ShopItem item : items.values()) {
                 bindShopItem(ps, item);
@@ -528,6 +547,50 @@ public class SQLiteStorage implements StorageProvider {
             LOGGER.log(Level.WARNING, "[SQLite] 加载商店数据失败", e);
         }
         return map;
+    }
+
+    @Override
+    public synchronized Integer getShopStock(String itemId) {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT available_stock FROM shop_data WHERE item_id=?")) {
+            ps.setString(1, itemId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : null;
+            }
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 商店库存操作失败", e);
+            return null;
+        }
+    }
+
+    @Override
+    public synchronized boolean consumeShopStockIfEnough(String itemId, int amount) {
+        if (amount <= 0) return false;
+        return updateShopStock("UPDATE shop_data SET available_stock=available_stock-? WHERE item_id=? " +
+                "AND mode='FIXED' AND stock_mode='LIMITED' AND available_stock>=?", itemId, amount, true);
+    }
+
+    @Override
+    public synchronized boolean addShopStockDelta(String itemId, int amount) {
+        if (amount <= 0) return false;
+        return updateShopStock("UPDATE shop_data SET available_stock=available_stock+? WHERE item_id=? AND available_stock>=0", itemId, amount, false);
+    }
+
+    @Override
+    public synchronized boolean setShopStock(String itemId, int amount) {
+        if (amount < 0) return false;
+        return updateShopStock("UPDATE shop_data SET available_stock=? WHERE item_id=?", itemId, amount, false);
+    }
+
+    private boolean updateShopStock(String sql, String itemId, int amount, boolean conditional) {
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setInt(1, amount);
+            ps.setString(2, itemId);
+            if (conditional) ps.setInt(3, amount);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            LOGGER.log(Level.WARNING, "[SQLite] 商店库存操作失败", e);
+            return false;
+        }
     }
 
     // ---- Recycle Data ----

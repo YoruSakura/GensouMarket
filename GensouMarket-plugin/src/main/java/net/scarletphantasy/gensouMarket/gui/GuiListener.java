@@ -15,6 +15,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.inventory.Inventory;
@@ -82,6 +83,16 @@ public class GuiListener implements Listener {
         }
 
         event.setCancelled(true);
+        String permission = switch (holder.getType()) {
+            case MAIN_MENU -> "gensoumarket.use";
+            case MARKET_BROWSE -> "gensoumarket.buy";
+            case PERSONAL_SHOP -> "gensoumarket.personal";
+            case SHOP -> "gensoumarket.shop";
+            case RECYCLE -> "gensoumarket.recycle";
+            case AUCTION_LIST, AUCTION_DETAIL -> "gensoumarket.auction";
+            default -> "gensoumarket.use";
+        };
+        if (!MessageUtil.requirePermission(player, permission)) return;
 
         if (event.getCurrentItem() == null || event.getCurrentItem().getType().isAir()) return;
 
@@ -103,27 +114,26 @@ public class GuiListener implements Listener {
     public void onInventoryDrag(InventoryDragEvent event) {
         if (!(event.getInventory().getHolder() instanceof GuiHolder holder)) return;
 
-        if (holder.getType() == GuiHolder.GuiType.TRADE) {
-            // 检查拖拽是否涉及只读 slot
-            for (int rawSlot : event.getRawSlots()) {
-                if (rawSlot < event.getInventory().getSize() && TradeGui.isReadOnlySlot(rawSlot)) {
-                    event.setCancelled(true);
-                    return;
-                }
-            }
-            // 拖拽涉及自己物品区或仅在玩家背包内，允许并延迟同步
-            boolean touchesTopInv = false;
-            for (int rawSlot : event.getRawSlots()) {
-                if (rawSlot < event.getInventory().getSize()) {
-                    touchesTopInv = true;
-                    break;
-                }
-            }
-            if (touchesTopInv) {
-                Player player = (Player) event.getWhoClicked();
-                scheduleTradeSync(player, event.getInventory());
-            }
+        boolean touchesTop = event.getRawSlots().stream()
+                .anyMatch(slot -> slot >= 0 && slot < event.getInventory().getSize());
+        if (!touchesTop) return;
+        if (holder.getType() != GuiHolder.GuiType.TRADE) {
+            event.setCancelled(true);
+            return;
         }
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            event.setCancelled(true);
+            return;
+        }
+        TradeManager manager = plugin.getTradeManager();
+        TradeSession session = manager == null ? null : manager.getSession(player.getUniqueId());
+        if (session == null || session.isEnded() || !session.ownsInventory(player.getUniqueId(), event.getInventory())
+                || event.getRawSlots().stream().anyMatch(slot -> slot < event.getInventory().getSize()
+                        && !TradeGui.isMyItemSlot(slot))) {
+            event.setCancelled(true);
+            return;
+        }
+        scheduleTradeSync(player, event.getInventory());
     }
 
     @EventHandler
@@ -145,7 +155,7 @@ public class GuiListener implements Listener {
         if (tradeManager == null) return;
 
         TradeSession session = tradeManager.getSession(player.getUniqueId());
-        if (session == null || session.isEnded()) return;
+        if (session == null || session.isEnded() || !session.ownsInventory(player.getUniqueId(), event.getInventory())) return;
 
         // 交易未完成就关闭了 GUI，取消交易
         Player other = Bukkit.getPlayer(session.getOtherUuid(player.getUniqueId()));
@@ -158,10 +168,21 @@ public class GuiListener implements Listener {
 
     private void handleTrade(Player player, GuiHolder holder, InventoryClickEvent event) {
         TradeManager tradeManager = plugin.getTradeManager();
-        if (tradeManager == null) return;
+        if (tradeManager == null) {
+            event.setCancelled(true);
+            return;
+        }
 
         TradeSession session = tradeManager.getSession(player.getUniqueId());
-        if (session == null || session.isEnded()) {
+        if (session == null || session.isEnded() || !session.ownsInventory(player.getUniqueId(), event.getInventory())) {
+            event.setCancelled(true);
+            return;
+        }
+
+        // 双击收集会扫描整个窗口，包含对方物品的展示副本。
+        if (event.getAction() == InventoryAction.COLLECT_TO_CURSOR
+                || event.getAction() == InventoryAction.CLONE_STACK
+                || event.getAction() == InventoryAction.UNKNOWN) {
             event.setCancelled(true);
             return;
         }
@@ -197,6 +218,10 @@ public class GuiListener implements Listener {
         // 确认按钮
         if (rawSlot == TradeGui.SLOT_CONFIRM) {
             event.setCancelled(true);
+            if (session.hasPendingSync()) {
+                MessageUtil.send(player, "&e交易物品正在更新，请稍后确认。");
+                return;
+            }
             if (session.isConfirmed(player.getUniqueId())) {
                 // 已确认，点击取消确认
                 session.setConfirmed(player.getUniqueId(), false);
@@ -260,27 +285,19 @@ public class GuiListener implements Listener {
      */
     private void scheduleTradeSync(Player player, Inventory topInv) {
         UUID uuid = player.getUniqueId();
+        TradeManager tradeManager = plugin.getTradeManager();
+        TradeSession session = tradeManager.getSession(uuid);
+        if (session == null || session.isEnded() || !session.ownsInventory(uuid, topInv)) return;
+        session.markPendingSync(uuid);
+        refreshBothStatusBars(session);
         Bukkit.getScheduler().runTask(plugin, () -> {
-            TradeManager tradeManager = plugin.getTradeManager();
-            if (tradeManager == null) return;
-
-            TradeSession session = tradeManager.getSession(uuid);
-            if (session == null || session.isEnded()) return;
-
-            // 从 GUI 读取自己物品区的实际内容
-            ItemStack[] myItems = TradeGui.readMyItems(topInv);
-            session.updateItems(uuid, myItems);
-
-            // 重置双方确认状态
-            session.resetConfirmations();
-
-            // 刷新对方 GUI 的对方物品区
+            if (tradeManager.getSession(uuid) != session || session.isEnded() || !session.ownsInventory(uuid, topInv)) return;
+            session.updateItems(uuid, TradeGui.readMyItems(topInv));
+            session.finishSync(uuid);
             Inventory opponentInv = session.getOpponentInventory(uuid);
             if (opponentInv != null) {
                 TradeGui.refreshOpponentItems(opponentInv, session, session.getOtherUuid(uuid));
             }
-
-            // 刷新双方状态栏
             refreshBothStatusBars(session);
         });
     }

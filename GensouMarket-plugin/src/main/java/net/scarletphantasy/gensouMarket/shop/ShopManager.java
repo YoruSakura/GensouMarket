@@ -69,10 +69,31 @@ public class ShopManager {
 
             shopItems.put(id, configItem);
         }
+        // 初始化缺失库存；UPSERT 保留现有权威值，包括另一台服务器刚扣减的库存。
+        storage.saveAllShopData(shopItems);
     }
 
     public void saveAllData() {
         storage.saveAllShopData(shopItems);
+    }
+
+    public void refreshFixedStocks(Runnable onComplete) {
+        Map<String, ShopItem> snapshot = new LinkedHashMap<>(shopItems);
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            Map<String, Integer> stocks = new LinkedHashMap<>();
+            snapshot.forEach((id, item) -> {
+                if (item.isFixedLimited()) {
+                    Integer stock = storage.getShopStock(id);
+                    if (stock != null) stocks.put(id, stock);
+                }
+            });
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                stocks.forEach((id, stock) -> {
+                    if (shopItems.get(id) == snapshot.get(id)) shopItems.get(id).setAvailableStock(stock);
+                });
+                onComplete.run();
+            });
+        });
     }
 
     public Map<String, ShopItem> getShopItems() {
@@ -178,6 +199,10 @@ public class ShopManager {
     }
 
     public void buyFromShop(Player player, String itemId, int amount, Runnable onComplete) {
+        if (!MessageUtil.requirePermission(player, "gensoumarket.shop")) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
         if (!config.isShopEnabled()) {
             MessageUtil.send(player, "&c服务器商店未启用！");
             if (onComplete != null) onComplete.run();
@@ -192,6 +217,10 @@ public class ShopManager {
         }
 
         if (amount <= 0) amount = 1;
+        if (shopItem.isFixedLimited()) {
+            buyFixedLimited(player, shopItem, amount, onComplete);
+            return;
+        }
 
         // recycled 模式：必须有可用来源
         RecycleItem recycleSource = null;
@@ -252,11 +281,7 @@ public class ShopManager {
 
         // 扣减库存（按模式）
         shopItem.addBought(amount);
-        if (shopItem.isFixedLimited()) {
-            shopItem.setAvailableStock(Math.max(shopItem.getAvailableStock() - amount, 0));
-            shopItem.setLastUpdate(System.currentTimeMillis());
-            storage.saveShopData(shopItem);
-        } else if (shopItem.isRecycled() && recycleSource != null) {
+        if (shopItem.isRecycled() && recycleSource != null) {
             // 非跨服 recycled——本地保存
             recycleSource.setRecycledStock(Math.max(recycleSource.getRecycledStock() - amount, 0));
             recycleSource.setLastUpdate(System.currentTimeMillis());
@@ -277,6 +302,73 @@ public class ShopManager {
                 .append(Component.text(")", NamedTextColor.GREEN)));
 
         if (onComplete != null) onComplete.run();
+    }
+
+    /** fixed+limited 使用共享数据库扣减；本地库存仅供展示和价格快照。 */
+    private void buyFixedLimited(Player player, ShopItem item, int amount, Runnable onComplete) {
+        double quotedCost = Math.round(computeCurrentPrice(item) * amount * 100.0) / 100.0;
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            Integer stock = storage.getShopStock(item.getId());
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                if (!player.isOnline()) {
+                    if (onComplete != null) onComplete.run();
+                    return;
+                }
+                if (stock == null || stock < amount) {
+                    if (stock != null) item.setAvailableStock(stock);
+                    MessageUtil.send(player, "&c库存不足或读取库存失败，请刷新后重试！");
+                    if (onComplete != null) onComplete.run();
+                    return;
+                }
+                item.setAvailableStock(stock);
+                double unitPrice = computeCurrentPrice(item);
+                double cost = Math.round(unitPrice * amount * 100.0) / 100.0;
+                if (quotedCost > 0 && Math.abs(cost - quotedCost) / quotedCost > config.getPriceChangeTolerance()) {
+                    MessageUtil.send(player, "&e库存价格已变化，请刷新后重新确认购买。");
+                    if (onComplete != null) onComplete.run();
+                    return;
+                }
+                if (!Double.isFinite(cost) || cost <= 0 || !vault.has(player, cost)) {
+                    MessageUtil.send(player, "&c余额不足或价格无效，购买已取消！");
+                    if (onComplete != null) onComplete.run();
+                    return;
+                }
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    boolean consumed = storage.consumeShopStockIfEnough(item.getId(), amount);
+                    Integer remaining = storage.getShopStock(item.getId());
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        if (remaining != null) item.setAvailableStock(remaining);
+                        if (!consumed) {
+                            MessageUtil.send(player, "&c库存不足或已被其他玩家抢购，请重试！");
+                            if (onComplete != null) onComplete.run();
+                            return;
+                        }
+                        if (!player.isOnline() || !vault.withdraw(player, cost)) {
+                            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                                if (!storage.addShopStockDelta(item.getId(), amount)) {
+                                    plugin.getLogger().severe("[Shop] 固定库存补偿失败 item=" + item.getId()
+                                            + " amount=" + amount + " player=" + player.getUniqueId());
+                                }
+                                Integer restored = storage.getShopStock(item.getId());
+                                Bukkit.getScheduler().runTask(plugin, () -> {
+                                    if (restored != null) item.setAvailableStock(restored);
+                                    if (onComplete != null) onComplete.run();
+                                });
+                            });
+                            if (player.isOnline()) MessageUtil.send(player, "&c扣款失败，购买已取消！");
+                            return;
+                        }
+                        MessageUtil.giveItem(player, new ItemStack(item.getMaterial(), amount));
+                        item.addBought(amount);
+                        item.setLastUpdate(System.currentTimeMillis());
+                        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveShopData(item));
+                        MessageUtil.send(player, "&a成功购买 &e" + amount + "x " + item.getMaterial().name()
+                                + "&a，花费: &e" + MessageUtil.formatMoney(cost));
+                        if (onComplete != null) onComplete.run();
+                    });
+                });
+            });
+        });
     }
 
     /**
@@ -417,9 +509,9 @@ public class ShopManager {
         if (item == null) return false;
         if (!item.isFixedLimited()) return false;
         if (amount < 0) return false;
+        if (!storage.setShopStock(id, amount)) return false;
         item.setAvailableStock(amount);
         item.setLastUpdate(System.currentTimeMillis());
-        storage.saveShopData(item);
         return true;
     }
 }

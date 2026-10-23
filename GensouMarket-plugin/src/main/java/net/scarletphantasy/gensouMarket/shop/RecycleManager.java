@@ -20,6 +20,8 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 
 public class RecycleManager {
@@ -108,6 +110,7 @@ public class RecycleManager {
      * 如果结算失败，不写入压力。
      */
     public boolean recycleItem(Player player, RecycleItem recycleItem, int amount) {
+        if (!MessageUtil.requirePermission(player, "gensoumarket.recycle")) return false;
         if (!config.isRecycleEnabled()) {
             MessageUtil.send(player, "&c回收站未启用！");
             return false;
@@ -168,14 +171,14 @@ public class RecycleManager {
                 return false;
             }
 
-            removeMaterial(player, material, finalAmount);
+            List<ItemStack> removedItems = removeMaterial(player, material, finalAmount);
             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                 boolean dbSuccess = storage.addRecycleStockDelta(recycleItem, finalAmount, finalAmount, now);
                 Bukkit.getScheduler().runTask(plugin, () -> {
                     boolean rewardHandled = false;
                     try {
                         if (!dbSuccess) {
-                            returnRecycleItems(player, playerUuid, material, finalAmount,
+                            returnRecycleItems(player, playerUuid, removedItems,
                                     "&c回收操作失败，物品已退回，请稍后重试！");
                             return;
                         }
@@ -278,28 +281,22 @@ public class RecycleManager {
         }
     }
 
-    private void returnRecycleItems(Player player, java.util.UUID playerUuid, Material material,
-                                    int amount, String onlineMessage) {
-        ItemStack returnItem = new ItemStack(material, amount);
-        if (player.isOnline()) {
-            java.util.HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(returnItem);
-            if (!overflow.isEmpty()) {
-                for (ItemStack drop : overflow.values()) {
-                    player.getWorld().dropItemNaturally(player.getLocation(), drop);
-                }
-            }
-            MessageUtil.send(player, onlineMessage);
-            return;
-        }
-
+    private void returnRecycleItems(Player player, java.util.UUID playerUuid, List<ItemStack> removedItems,
+                                    String onlineMessage) {
         String message = "回收操作失败，物品已退回";
-        if (plugin.isClusterEnabled()) {
-            plugin.getClusterEventPublisher().requestRemoteGiveItem(
-                    playerUuid, ItemSerializer.serialize(returnItem), message,
-                    ignored -> saveRecycleItemMailAsync(playerUuid, returnItem, message));
-        } else {
-            saveRecycleItemMailAsync(playerUuid, returnItem, message);
+        for (ItemStack original : removedItems) {
+            ItemStack returnItem = original.clone();
+            if (player.isOnline()) {
+                MessageUtil.giveItem(player, returnItem);
+            } else if (plugin.isClusterEnabled()) {
+                plugin.getClusterEventPublisher().requestRemoteGiveItem(
+                        playerUuid, ItemSerializer.serialize(returnItem), message,
+                        ignored -> saveRecycleItemMailAsync(playerUuid, returnItem, message));
+            } else {
+                saveRecycleItemMailAsync(playerUuid, returnItem, message);
+            }
         }
+        if (player.isOnline()) MessageUtil.send(player, onlineMessage);
     }
 
     private void saveRecycleMoneyMailAsync(java.util.UUID playerUuid, double amount, String message) {
@@ -339,21 +336,27 @@ public class RecycleManager {
         return count;
     }
 
-    private void removeMaterial(Player player, Material material, int amount) {
+    private List<ItemStack> removeMaterial(Player player, Material material, int amount) {
         ItemStack[] contents = player.getInventory().getContents();
+        List<ItemStack> removed = new ArrayList<>();
         int remaining = amount;
         for (int i = 0; i < contents.length && remaining > 0; i++) {
             ItemStack item = contents[i];
             if (item != null && item.getType() == material) {
-                if (item.getAmount() <= remaining) {
-                    remaining -= item.getAmount();
+                int taken = Math.min(item.getAmount(), remaining);
+                ItemStack original = item.clone();
+                original.setAmount(taken);
+                removed.add(original);
+                remaining -= taken;
+                if (taken == item.getAmount()) {
                     player.getInventory().setItem(i, null);
                 } else {
-                    item.setAmount(item.getAmount() - remaining);
-                    remaining = 0;
+                    item.setAmount(item.getAmount() - taken);
+                    player.getInventory().setItem(i, item);
                 }
             }
         }
+        return removed;
     }
 
     /**

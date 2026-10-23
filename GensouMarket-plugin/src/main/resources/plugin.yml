@@ -1,6 +1,7 @@
 name: GensouMarket
 version: '${version}'
 main: net.scarletphantasy.gensouMarket.GensouMarket
+# Minimum API; the build verifies the published Paper API lines from 1.21 through 26.3.
 api-version: '1.21'
 prefix: 幻想集市
 depend: [Vault]

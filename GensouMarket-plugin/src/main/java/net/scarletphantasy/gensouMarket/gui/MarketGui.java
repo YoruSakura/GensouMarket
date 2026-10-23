@@ -31,6 +31,7 @@ public final class MarketGui {
 
     @SuppressWarnings("unused")
     public static void openMainMenu(GensouMarket plugin, Player player) {
+        if (!MessageUtil.requirePermission(player, "gensoumarket.use")) return;
         GuiHolder holder = new GuiHolder(GuiHolder.GuiType.MAIN_MENU);
         Inventory inv = Bukkit.createInventory(holder, 27,
                 Component.text("幻想集市", NamedTextColor.GOLD));
@@ -67,6 +68,7 @@ public final class MarketGui {
     }
 
     public static void openMarketBrowse(GensouMarket plugin, Player player, List<MarketListing> listings, int page) {
+        if (!MessageUtil.requirePermission(player, "gensoumarket.buy")) return;
         GuiHolder holder = new GuiHolder(GuiHolder.GuiType.MARKET_BROWSE);
         holder.setData("page", page);
         holder.setData("listings", listings);
@@ -88,6 +90,7 @@ public final class MarketGui {
 
     public static void openPersonalShop(GensouMarket plugin, Player player, UUID sellerUuid, String sellerName,
                                         List<MarketListing> listings, int page) {
+        if (!MessageUtil.requirePermission(player, "gensoumarket.personal")) return;
         GuiHolder holder = new GuiHolder(GuiHolder.GuiType.PERSONAL_SHOP);
         holder.setData("page", page);
         holder.setData("listings", listings);

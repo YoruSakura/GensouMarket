@@ -216,8 +216,8 @@ public class TradeManager {
         Bukkit.getScheduler().runTask(plugin, () -> {
             Player a = Bukkit.getPlayer(session.getPlayerAUuid());
             Player b = Bukkit.getPlayer(session.getPlayerBUuid());
-            if (a != null && a.isOnline()) a.closeInventory();
-            if (b != null && b.isOnline()) b.closeInventory();
+            if (a != null && a.isOnline() && session.ownsInventory(a.getUniqueId(), a.getOpenInventory().getTopInventory())) a.closeInventory();
+            if (b != null && b.isOnline() && session.ownsInventory(b.getUniqueId(), b.getOpenInventory().getTopInventory())) b.closeInventory();
         });
 
         // 无活跃会话时停止距离检测
@@ -413,6 +413,7 @@ public class TradeManager {
         private Inventory playerBInventory;
 
         private boolean ended = false;
+        private final Set<UUID> pendingSync = new HashSet<>();
 
         public TradeSession(UUID playerAUuid, UUID playerBUuid, String playerAName, String playerBName) {
             this.playerAUuid = playerAUuid;
@@ -453,6 +454,24 @@ public class TradeManager {
             return isPlayerA(uuid) ? playerBInventory : playerAInventory;
         }
 
+        public boolean ownsInventory(UUID uuid, Inventory inventory) {
+            return inventory != null && (playerAUuid.equals(uuid) && playerAInventory == inventory
+                    || playerBUuid.equals(uuid) && playerBInventory == inventory);
+        }
+
+        public void markPendingSync(UUID uuid) {
+            pendingSync.add(uuid);
+            resetConfirmations();
+        }
+
+        public void finishSync(UUID uuid) { pendingSync.remove(uuid); }
+        public boolean hasPendingSync() { return !pendingSync.isEmpty(); }
+
+        private void captureGuiItems() {
+            if (playerAInventory != null) updateItems(playerAUuid, TradeGui.readMyItems(playerAInventory));
+            if (playerBInventory != null) updateItems(playerBUuid, TradeGui.readMyItems(playerBInventory));
+        }
+
         public boolean isConfirmed(UUID uuid) {
             return isPlayerA(uuid) ? playerAConfirmed : playerBConfirmed;
         }
@@ -466,7 +485,7 @@ public class TradeManager {
         }
 
         public boolean areBothConfirmed() {
-            return playerAConfirmed && playerBConfirmed;
+            return !hasPendingSync() && playerAConfirmed && playerBConfirmed;
         }
 
         public void resetConfirmations() {
@@ -488,6 +507,7 @@ public class TradeManager {
          * 执行物品交换
          */
         public void executeTrade() {
+            captureGuiItems();
             Player a = Bukkit.getPlayer(playerAUuid);
             Player b = Bukkit.getPlayer(playerBUuid);
 
@@ -509,6 +529,7 @@ public class TradeManager {
          * 取消交易，返还物品
          */
         public void returnItems() {
+            captureGuiItems();
             // 先清空 GUI
             clearGuiItems(playerAInventory);
             clearGuiItems(playerBInventory);

@@ -30,13 +30,14 @@ public class MarketManager {
     }
 
     public void sellItem(Player seller, double price) {
+        if (!MessageUtil.requirePermission(seller, "gensoumarket.sell")) return;
         ItemStack item = seller.getInventory().getItemInMainHand();
         if (item.getType().isAir()) {
             MessageUtil.send(seller, "&c请手持要上架的物品！");
             return;
         }
 
-        if (price <= 0) {
+        if (!Double.isFinite(price) || price <= 0) {
             MessageUtil.send(seller, "&c价格必须大于0！");
             return;
         }
@@ -131,20 +132,22 @@ public class MarketManager {
                         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.updateListing(listing));
 
                         // 玩家离线时物品进邮箱
-                        if (player.isOnline()) {
-                            MessageUtil.giveItem(player, listing.getItemStack());
-                            MessageUtil.send(player, "&a已成功下架物品 #" + listingId);
+                        Player owner = Bukkit.getPlayer(listing.getSellerUuid());
+                        if (owner != null && owner.isOnline()) {
+                            MessageUtil.giveItem(owner, listing.getItemStack());
                         } else {
                             MailEntry mail = new MailEntry();
-                            mail.setPlayerUuid(playerUuid);
+                            mail.setPlayerUuid(listing.getSellerUuid());
                             mail.setItemData(listing.getItemData());
                             mail.setMessage("你下架的物品 #" + listingId + "（下架时已离线）");
                             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                                 storage.saveMail(mail);
-                                publishIfCluster(p -> p.publishMailCreated(playerUuid,
+                                publishIfCluster(p -> p.publishMailCreated(listing.getSellerUuid(),
                                         false, true, mail.getMessage()));
                             });
                         }
+
+                        if (player.isOnline()) MessageUtil.send(player, "&a已成功下架物品 #" + listingId + "，物品已退还卖家");
 
                         // 跨服广播下架
                         publishIfCluster(p -> p.publishListingChanged(listingId, "CANCELLED", listing.getSellerUuid()));
@@ -155,6 +158,7 @@ public class MarketManager {
     }
 
     public void buyListing(Player buyer, int listingId) {
+        if (!MessageUtil.requirePermission(buyer, "gensoumarket.buy")) return;
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             MarketListing listing = storage.getListing(listingId);
             if (listing == null || listing.getStatus() != MarketListing.Status.ACTIVE) {

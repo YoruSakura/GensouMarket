@@ -169,7 +169,7 @@ public class ProxyBridge implements PluginMessageListener {
     }
 
     public String newRequestId() {
-        return UUID.randomUUID().toString().substring(0, 8);
+        return UUID.randomUUID().toString();
     }
 
     private Player pickOnlinePlayer() {
@@ -186,6 +186,10 @@ public class ProxyBridge implements PluginMessageListener {
         if (onAck != null || onFail != null) {
             BukkitTask timeoutTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
                 PendingRequestContext removed = pendingRequests.remove(packet.getRequestId());
+                if (removed != null && packet.getType() == PacketType.REMOTE_GIVE_ITEM) {
+                    plugin.getLogger().severe("[Bridge] 远程物品投递结果未知，需人工核对；未自动补发以免重复。requestId="
+                            + packet.getRequestId() + " target=" + packet.getPayload().get("targetPlayerUuid"));
+                }
                 if (failOnTimeout && removed != null && removed.onFail() != null) {
                     removed.onFail().accept(null);
                 }

@@ -16,6 +16,12 @@ public final class MessageUtil {
 
     private MessageUtil() {}
 
+    public static boolean requirePermission(Player player, String permission) {
+        if (player.hasPermission("gensoumarket.use") && player.hasPermission(permission)) return true;
+        send(player, "&c你没有权限使用此功能！");
+        return false;
+    }
+
     public static String color(String message) {
         return SECTION.serialize(AMPERSAND.deserialize(message));
     }

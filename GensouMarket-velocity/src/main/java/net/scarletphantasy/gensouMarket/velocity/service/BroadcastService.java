@@ -67,8 +67,7 @@ public class BroadcastService {
             return false;
         }
         byte[] data = PacketCodec.encode(packet);
-        server.sendPluginMessage(channelId, data);
-        return true;
+        return server.sendPluginMessage(channelId, data);
     }
 
     /**
@@ -78,8 +77,7 @@ public class BroadcastService {
         return routeService.locatePlayer(playerUuid)
                 .map(server -> {
                     byte[] data = PacketCodec.encode(packet);
-                    server.sendPluginMessage(channelId, data);
-                    return true;
+                    return server.sendPluginMessage(channelId, data);
                 })
                 .orElse(false);
     }

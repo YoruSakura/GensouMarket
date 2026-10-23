@@ -34,13 +34,14 @@ public class AuctionManager {
     }
 
     public void createAuction(Player seller, double startingPrice, int durationMinutes) {
+        if (!MessageUtil.requirePermission(seller, "gensoumarket.auction")) return;
         ItemStack item = seller.getInventory().getItemInMainHand();
         if (item.getType().isAir()) {
             MessageUtil.send(seller, "&c请手持要拍卖的物品！");
             return;
         }
 
-        if (startingPrice <= 0) {
+        if (!Double.isFinite(startingPrice) || startingPrice <= 0) {
             MessageUtil.send(seller, "&c起拍价必须大于0！");
             return;
         }
@@ -142,6 +143,11 @@ public class AuctionManager {
     }
 
     public void placeBid(Player bidder, int auctionId, double amount) {
+        if (!MessageUtil.requirePermission(bidder, "gensoumarket.auction")) return;
+        if (!Double.isFinite(amount) || amount <= 0) {
+            MessageUtil.send(bidder, "&c出价必须为有效的正数！");
+            return;
+        }
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             Auction auction = storage.getAuction(auctionId);
             if (auction == null || auction.getStatus() != Auction.Status.ACTIVE) {
@@ -200,7 +206,7 @@ public class AuctionManager {
                 // 先扣款，再异步原子出价。CAS 失败时立即退款，避免 DB 中出现未付款最高出价。
                 Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                     boolean success = storage.updateAuctionBidIfMatch(
-                            auctionId, oldPrice, amount, bidderUuid, bidderName);
+                            auctionId, oldPrice, oldBidderUuid, amount, bidderUuid, bidderName);
 
                     Bukkit.getScheduler().runTask(plugin, () -> {
                         if (!success) {
@@ -436,10 +442,10 @@ public class AuctionManager {
 
                 // 异步原子取消
                 Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    boolean cancelled = storage.markAuctionCancelledIfActive(auctionId);
+                    boolean cancelled = storage.markAuctionCancelledIfMatch(auctionId, auction.getCurrentPrice(), auction.getHighestBidderUuid());
                     if (!cancelled) {
                         Bukkit.getScheduler().runTask(plugin, () -> {
-                            if (player.isOnline()) MessageUtil.send(player, "&c该拍卖已结束，无法取消！");
+                            if (player.isOnline()) MessageUtil.send(player, "&c拍卖已结束或出价发生变化，请刷新后重试取消！");
                         });
                         return;
                     }
@@ -486,9 +492,9 @@ public class AuctionManager {
                         }
 
                         // 退还物品给卖家（离线时进邮箱）
-                        if (player.isOnline()) {
-                            MessageUtil.giveItem(player, auction.getItemStack());
-                            MessageUtil.send(player, "&a已取消拍卖 #" + auctionId + "，手续费不退还");
+                        Player owner = Bukkit.getPlayer(auction.getSellerUuid());
+                        if (owner != null && owner.isOnline()) {
+                            MessageUtil.giveItem(owner, auction.getItemStack());
                         } else {
                             MailEntry sellerMail = new MailEntry();
                             sellerMail.setPlayerUuid(auction.getSellerUuid());
@@ -500,6 +506,8 @@ public class AuctionManager {
                                         false, true, sellerMail.getMessage()));
                             });
                         }
+
+                        if (player.isOnline()) MessageUtil.send(player, "&a已取消拍卖 #" + auctionId + "，物品已退还卖家，手续费不退还");
 
                         // 取消定时任务
                         Integer taskId = scheduledTasks.remove(auctionId);
@@ -548,7 +556,7 @@ public class AuctionManager {
         int cancelled = 0;
         for (Auction auction : active) {
             // 原子抢占取消
-            if (!storage.markAuctionCancelledIfActive(auction.getId())) continue;
+            if (!storage.markAuctionCancelledIfMatch(auction.getId(), auction.getCurrentPrice(), auction.getHighestBidderUuid())) continue;
             cancelled++;
 
             if (auction.hasBidder()) {

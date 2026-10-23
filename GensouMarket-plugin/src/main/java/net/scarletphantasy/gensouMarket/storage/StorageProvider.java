@@ -44,13 +44,13 @@ public interface StorageProvider {
     List<Auction> getActiveAuctions();
 
     /**
-     * 原子操作：当拍卖处于 ACTIVE 状态且当前价格匹配时，更新竞拍出价。
+     * 原子操作：当拍卖处于 ACTIVE 状态且当前价格、最高出价者均匹配时，更新竞拍出价。
      * SQL: UPDATE ... SET current_price=?, highest_bidder_uuid=?, highest_bidder_name=?
-     *      WHERE id=? AND status='ACTIVE' AND current_price=?
+     *      WHERE id=? AND status='ACTIVE' AND current_price=? AND highest_bidder_uuid 与预期值相同
      * @param expectedCurrentPrice 期望的当前价格（乐观锁条件）
      * @return true 表示出价成功
      */
-    boolean updateAuctionBidIfMatch(int auctionId, double expectedCurrentPrice,
+    boolean updateAuctionBidIfMatch(int auctionId, double expectedCurrentPrice, UUID expectedBidderUuid,
                                      double newPrice, UUID newBidderUuid, String newBidderName);
 
     /**
@@ -61,15 +61,21 @@ public interface StorageProvider {
     boolean markAuctionEndedIfActive(int auctionId);
 
     /**
-     * 原子操作：将 ACTIVE 状态的拍卖标记为 CANCELLED。
+     * 原子操作：仅在价格和最高出价者均未变化时，将 ACTIVE 拍卖标记为 CANCELLED。
      * @return true 表示成功
      */
-    boolean markAuctionCancelledIfActive(int auctionId);
+    boolean markAuctionCancelledIfMatch(int auctionId, double expectedPrice, UUID expectedBidderUuid);
 
     // ---- Shop Data ----
     void saveShopData(ShopItem item);
     void saveAllShopData(Map<String, ShopItem> items);
     Map<String, ShopItem> loadShopData();
+
+    // fixed+limited 库存由数据库维护；普通保存不得覆盖已有库存。
+    Integer getShopStock(String itemId);
+    boolean consumeShopStockIfEnough(String itemId, int amount);
+    boolean addShopStockDelta(String itemId, int amount);
+    boolean setShopStock(String itemId, int amount);
 
     // ---- Recycle Data ----
     void saveRecycleData(RecycleItem item);

@@ -390,10 +390,11 @@ public class MySQLStorage implements StorageProvider {
     }
 
     @Override
-    public boolean updateAuctionBidIfMatch(int auctionId, double expectedCurrentPrice,
+    public boolean updateAuctionBidIfMatch(int auctionId, double expectedCurrentPrice, UUID expectedBidderUuid,
                                             double newPrice, UUID newBidderUuid, String newBidderName) {
         String sql = "UPDATE auctions SET current_price=?, highest_bidder_uuid=?, highest_bidder_name=? " +
-                     "WHERE id=? AND status='ACTIVE' AND current_price=?";
+                     "WHERE id=? AND status='ACTIVE' AND current_price=? " +
+                     "AND (highest_bidder_uuid=? OR (highest_bidder_uuid IS NULL AND ? IS NULL))";
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setDouble(1, newPrice);
@@ -401,6 +402,9 @@ public class MySQLStorage implements StorageProvider {
             ps.setString(3, newBidderName);
             ps.setInt(4, auctionId);
             ps.setDouble(5, expectedCurrentPrice);
+            String expectedBidder = expectedBidderUuid == null ? null : expectedBidderUuid.toString();
+            ps.setString(6, expectedBidder);
+            ps.setString(7, expectedBidder);
             return ps.executeUpdate() == 1;
         } catch (SQLException e) {
             logThrottled("[MySQL] 原子更新拍卖出价失败", e);
@@ -422,11 +426,16 @@ public class MySQLStorage implements StorageProvider {
     }
 
     @Override
-    public boolean markAuctionCancelledIfActive(int auctionId) {
-        String sql = "UPDATE auctions SET status='CANCELLED' WHERE id=? AND status='ACTIVE'";
+    public boolean markAuctionCancelledIfMatch(int auctionId, double expectedPrice, UUID expectedBidderUuid) {
+        String sql = "UPDATE auctions SET status='CANCELLED' WHERE id=? AND status='ACTIVE' AND current_price=? " +
+                "AND (highest_bidder_uuid=? OR (highest_bidder_uuid IS NULL AND ? IS NULL))";
         try (Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setInt(1, auctionId);
+            ps.setDouble(2, expectedPrice);
+            String expectedBidder = expectedBidderUuid == null ? null : expectedBidderUuid.toString();
+            ps.setString(3, expectedBidder);
+            ps.setString(4, expectedBidder);
             return ps.executeUpdate() == 1;
         } catch (SQLException e) {
             logThrottled("[MySQL] 原子标记拍卖取消失败", e);
@@ -452,7 +461,7 @@ public class MySQLStorage implements StorageProvider {
         return a;
     }
 
-    private void migrateShopToRecycle(Connection conn) {
+    private void migrateShopToRecycle(Connection conn) throws SQLException {
         try {
             boolean recycleEmpty;
             try (Statement stmt = conn.createStatement();
@@ -472,14 +481,14 @@ public class MySQLStorage implements StorageProvider {
                 }
             }
         } catch (SQLException e) {
-            logThrottled("[MySQL] shop_data 迁移失败", e);
+            throw e;
         }
     }
 
     /**
      * 对旧版数据库补齐 task-05 新增列。使用 information_schema 检测以兼容各版本 MySQL。
      */
-    private void migrateSchema(Connection conn) {
+    private void migrateSchema(Connection conn) throws SQLException {
         addColumnIfMissing(conn, "shop_data", "mode", "VARCHAR(16) NOT NULL DEFAULT 'FIXED'");
         addColumnIfMissing(conn, "shop_data", "stock_mode", "VARCHAR(16) NOT NULL DEFAULT 'UNLIMITED'");
         addColumnIfMissing(conn, "shop_data", "available_stock", "INT NOT NULL DEFAULT -1");
@@ -487,7 +496,7 @@ public class MySQLStorage implements StorageProvider {
         addColumnIfMissing(conn, "recycle_data", "recycled_stock", "INT NOT NULL DEFAULT 0");
     }
 
-    private void addColumnIfMissing(Connection conn, String table, String column, String definition) {
+    private boolean hasColumn(Connection conn, String table, String column) throws SQLException {
         String check = "SELECT COUNT(*) FROM information_schema.COLUMNS " +
                 "WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND COLUMN_NAME=?";
         try (PreparedStatement ps = conn.prepareStatement(check)) {
@@ -495,17 +504,18 @@ public class MySQLStorage implements StorageProvider {
             ps.setString(2, table);
             ps.setString(3, column);
             try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next() && rs.getInt(1) > 0) return;
+                return rs.next() && rs.getInt(1) > 0;
             }
-        } catch (SQLException e) {
-            logThrottled("[MySQL] 检查 " + table + "." + column + " 失败", e);
-            return;
         }
+    }
+
+    private void addColumnIfMissing(Connection conn, String table, String column, String definition) throws SQLException {
+        if (hasColumn(conn, table, column)) return;
         try (Statement stmt = conn.createStatement()) {
             stmt.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
             LOGGER.info("[MySQL] 已补齐列 " + table + "." + column);
         } catch (SQLException e) {
-            logThrottled("[MySQL] 添加 " + table + "." + column + " 失败", e);
+            if (!hasColumn(conn, table, column)) throw e;
         }
     }
 
@@ -516,7 +526,7 @@ public class MySQLStorage implements StorageProvider {
         String sql = "INSERT INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) " +
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE " +
                 "total_bought=VALUES(total_bought), last_update=VALUES(last_update), " +
-                "mode=VALUES(mode), stock_mode=VALUES(stock_mode), available_stock=VALUES(available_stock), " +
+                "mode=VALUES(mode), stock_mode=VALUES(stock_mode), available_stock=IF(available_stock < 0, VALUES(available_stock), available_stock), " +
                 "recycle_source_id=VALUES(recycle_source_id), sell_multiplier=VALUES(sell_multiplier), " +
                 "base_buy_price=VALUES(base_buy_price)";
         try (Connection conn = getConnection();
@@ -533,7 +543,7 @@ public class MySQLStorage implements StorageProvider {
         String sql = "INSERT INTO shop_data (item_id, material, base_buy_price, base_sell_price, total_bought, total_sold, buy_multiplier, sell_multiplier, last_update, mode, stock_mode, available_stock, recycle_source_id) " +
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE " +
                 "total_bought=VALUES(total_bought), last_update=VALUES(last_update), " +
-                "mode=VALUES(mode), stock_mode=VALUES(stock_mode), available_stock=VALUES(available_stock), " +
+                "mode=VALUES(mode), stock_mode=VALUES(stock_mode), available_stock=IF(available_stock < 0, VALUES(available_stock), available_stock), " +
                 "recycle_source_id=VALUES(recycle_source_id), sell_multiplier=VALUES(sell_multiplier), " +
                 "base_buy_price=VALUES(base_buy_price)";
         try (Connection conn = getConnection();
@@ -595,6 +605,52 @@ public class MySQLStorage implements StorageProvider {
             logThrottled("[MySQL] 加载商店数据失败", e);
         }
         return map;
+    }
+
+    @Override
+    public Integer getShopStock(String itemId) {
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement("SELECT available_stock FROM shop_data WHERE item_id=?")) {
+            ps.setString(1, itemId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : null;
+            }
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 商店库存操作失败", e);
+            return null;
+        }
+    }
+
+    @Override
+    public boolean consumeShopStockIfEnough(String itemId, int amount) {
+        if (amount <= 0) return false;
+        return updateShopStock("UPDATE shop_data SET available_stock=available_stock-? WHERE item_id=? " +
+                "AND mode='FIXED' AND stock_mode='LIMITED' AND available_stock>=?", itemId, amount, true);
+    }
+
+    @Override
+    public boolean addShopStockDelta(String itemId, int amount) {
+        if (amount <= 0) return false;
+        return updateShopStock("UPDATE shop_data SET available_stock=available_stock+? WHERE item_id=? AND available_stock>=0", itemId, amount, false);
+    }
+
+    @Override
+    public boolean setShopStock(String itemId, int amount) {
+        if (amount < 0) return false;
+        return updateShopStock("UPDATE shop_data SET available_stock=? WHERE item_id=?", itemId, amount, false);
+    }
+
+    private boolean updateShopStock(String sql, String itemId, int amount, boolean conditional) {
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, amount);
+            ps.setString(2, itemId);
+            if (conditional) ps.setInt(3, amount);
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            logThrottled("[MySQL] 商店库存操作失败", e);
+            return false;
+        }
     }
 
     // ---- Recycle Data ----

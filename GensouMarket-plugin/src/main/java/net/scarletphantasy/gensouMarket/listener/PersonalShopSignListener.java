@@ -73,6 +73,10 @@ public class PersonalShopSignListener implements Listener {
             return;
         }
 
+        if (!MessageUtil.requirePermission(player, "gensoumarket.personal")) {
+            event.setCancelled(true);
+            return;
+        }
         boolean isAdmin = player.hasPermission("gensoumarket.admin");
         if (!isAdmin && !player.hasPermission("gensoumarket.personal.sign.create")) {
             MessageUtil.send(player, "&c你没有权限创建个人商店牌子");
@@ -119,6 +123,7 @@ public class PersonalShopSignListener implements Listener {
             return;
         }
 
+        if (!MessageUtil.requirePermission(viewer, "gensoumarket.personal")) return;
         SignBinding binding = opt.get();
         openForOwner(viewer, binding.ownerUuid(), binding.ownerName());
     }
