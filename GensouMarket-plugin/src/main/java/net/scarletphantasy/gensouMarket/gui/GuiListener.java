@@ -601,8 +601,16 @@ public class GuiListener implements Listener {
             if (index < items.size()) {
                 ShopItem shopItem = items.get(index);
                 int amount = event.isShiftClick() ? 64 : 1;
-                double currentUnitPrice = plugin.getShopManager().computeCurrentPrice(shopItem);
-                double totalCost = Math.round(currentUnitPrice * amount * 100.0) / 100.0;
+                int available = plugin.getShopManager().computeAvailableStock(shopItem);
+                if (available <= 0) {
+                    MessageUtil.send(player, "&c该商品已缺货！");
+                    return;
+                }
+                if (available < amount) {
+                    MessageUtil.send(player, "&c库存不足，当前剩余 &e" + available + "&c 个！");
+                    return;
+                }
+                double totalCost = plugin.getShopManager().computePurchasePriceResult(shopItem, amount).totalPrice();
 
                 String actionKey = "shop_buy_" + amount;
                 UUID uuid = player.getUniqueId();
@@ -627,16 +635,6 @@ public class GuiListener implements Listener {
                         }
                     });
                 } else {
-                    // v1.1.2 缺货预检查：在创建确认会话前检查库存
-                    int available = plugin.getShopManager().computeAvailableStock(shopItem);
-                    if (available <= 0) {
-                        MessageUtil.send(player, "&c该商品已缺货！");
-                        return;
-                    }
-                    if (available < amount) {
-                        MessageUtil.send(player, "&c库存不足，当前剩余 &e" + available + "&c 个！");
-                        return;
-                    }
                     // 首次点击：记录价格快照
                     pendingConfirmations.put(uuid, new PendingAction(actionKey, index, now, totalCost));
                     MessageUtil.send(player, "&e再次点击确认购买 &6" + amount + "x&e，花费: &6" + MessageUtil.formatMoney(totalCost));
@@ -671,12 +669,7 @@ public class GuiListener implements Listener {
             if (index < items.size()) {
                 RecycleItem recycleItem = items.get(index);
                 
-                int available = 0;
-                for (ItemStack item : player.getInventory().getContents()) {
-                    if (item != null && item.getType() == recycleItem.getMaterial()) {
-                        available += item.getAmount();
-                    }
-                }
+                int available = plugin.getRecycleManager().countMatching(player, recycleItem);
                 
                 if (available <= 0) {
                     MessageUtil.send(player, "&c你的背包中没有该物品！");

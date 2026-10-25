@@ -14,5 +14,15 @@ public record ShopPricingConfig(
     double antiArbitrageMultiplier,
     Integer pricingReferenceStock,
     Double minSellPrice,
-    Double maxSellPrice
-) {}
+    Double maxSellPrice,
+    double cyclePeriodHours,
+    double cycleAmplitude
+) {
+    public ShopPricingConfig withCycle(double periodHours, double amplitude) {
+        return new ShopPricingConfig(dynamicEnabled, minSellMultiplier, maxSellMultiplier,
+                fixedDynamicEnabled, recycledDynamicEnabled, minStockMultiplier, maxStockMultiplier,
+                targetRecycledStock, minRecycledStockMultiplier, maxRecycledStockMultiplier,
+                antiArbitrageMultiplier, pricingReferenceStock, minSellPrice, maxSellPrice,
+                periodHours, amplitude);
+    }
+}

@@ -49,6 +49,36 @@ class FixedStockFlowTest {
         assertEquals(50, fixture.item.getAvailableStock());
     }
 
+    @Test void batchPaymentUsesTheWholeQuoteAndRestoresTheWholeStockOnFailure() {
+        var fixture = new Fixture();
+        fixture.item.setAvailableStock(64);
+        doReturn(new PriceResult(100, 7975.04, 124.61, 100, 1, 0, 1, 1, false))
+                .when(fixture.manager).computePurchasePriceResult(fixture.item, 64);
+        when(fixture.storage.getShopStock("limited")).thenReturn(64, 0, 64);
+        when(fixture.storage.consumeShopStockIfEnough("limited", 64)).thenReturn(true);
+        when(fixture.storage.addShopStockDelta("limited", 64)).thenReturn(true);
+        when(fixture.vault.has(fixture.player, 7975.04)).thenReturn(true);
+        fixture.buy(64);
+        verify(fixture.vault).withdraw(fixture.player, 7975.04);
+        verify(fixture.vault, never()).withdraw(fixture.player, 6400);
+        verify(fixture.storage).addShopStockDelta("limited", 64);
+        verify(fixture.player, never()).getInventory();
+        assertEquals(64, fixture.item.getAvailableStock());
+    }
+
+    @Test void aChangedBatchQuoteIsRejectedBeforeReservingOrCharging() {
+        var fixture = new Fixture();
+        fixture.item.setAvailableStock(64);
+        doReturn(new PriceResult(100, 6400, 100, 100, 1, 0, 1, 1, false),
+                new PriceResult(100, 7975.04, 124.61, 100, 1, 0, 1, 1, false))
+                .when(fixture.manager).computePurchasePriceResult(fixture.item, 64);
+        when(fixture.storage.getShopStock("limited")).thenReturn(64);
+        fixture.buy(64);
+        verify(fixture.storage, never()).consumeShopStockIfEnough(anyString(), anyInt());
+        verify(fixture.vault, never()).withdraw(any(), anyDouble());
+        assertEquals(1, fixture.completed.get());
+    }
+
     private static class Fixture {
         final GensouMarket plugin = mock(GensouMarket.class);
         final StorageProvider storage = mock(StorageProvider.class);
@@ -71,11 +101,16 @@ class FixedStockFlowTest {
             item.setStockMode(ShopItem.StockMode.LIMITED);
             item.setAvailableStock(1);
             manager = spy(new ShopManager(plugin));
-            doReturn(10.0).when(manager).computeCurrentPrice(item);
+            doReturn(new PriceResult(10, 10, 10, 10, 1, 0, 1, 1, false))
+                    .when(manager).computePurchasePriceResult(item, 1);
             manager.getShopItems().put("limited", item);
         }
 
         void buy() {
+            buy(1);
+        }
+
+        void buy(int amount) {
             var scheduler = mock(BukkitScheduler.class);
             when(scheduler.runTask(any(GensouMarket.class), any(Runnable.class))).thenAnswer(call -> {
                 call.getArgument(1, Runnable.class).run(); return null;
@@ -86,7 +121,7 @@ class FixedStockFlowTest {
             try (var bukkit = mockStatic(Bukkit.class); var instance = mockStatic(GensouMarket.class)) {
                 instance.when(GensouMarket::getInstance).thenReturn(plugin);
                 bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-                manager.buyFromShop(player, "limited", 1, completed::incrementAndGet);
+                manager.buyFromShop(player, "limited", amount, completed::incrementAndGet);
             }
         }
     }

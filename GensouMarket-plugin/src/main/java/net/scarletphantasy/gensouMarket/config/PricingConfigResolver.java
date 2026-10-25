@@ -1,13 +1,17 @@
 package net.scarletphantasy.gensouMarket.config;
 
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.MemoryConfiguration;
 
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 public class PricingConfigResolver {
 
     private final ConfigManager configManager;
     private final Logger logger;
+    private final Set<String> warnedGroups = ConcurrentHashMap.newKeySet();
 
     public PricingConfigResolver(ConfigManager configManager, Logger logger) {
         this.configManager = configManager;
@@ -16,7 +20,9 @@ public class PricingConfigResolver {
 
     public RecyclePricingConfig resolveForRecycleItem(String itemId) {
         RecyclePricingConfig defaults = configManager.getRecyclePricingDefaults();
-        ConfigurationSection section = configManager.getRecycleItemPricingSection(itemId);
+        ConfigurationSection group = findGroup(configManager.getRecycleItemPricingGroup(itemId), "回收", itemId);
+        ConfigurationSection section = mergePricing(child(group, "recycle"),
+                configManager.getRecycleItemPricingSection(itemId));
         if (section == null) return defaults;
 
         boolean dynamicEnabled = section.contains("dynamic-enabled")
@@ -93,7 +99,18 @@ public class PricingConfigResolver {
 
     public ShopPricingConfig resolveForShopItem(String itemId) {
         ShopPricingConfig defaults = configManager.getShopPricingDefaults();
-        ConfigurationSection section = configManager.getShopItemPricingSection(itemId);
+        ConfigurationSection group = findGroup(configManager.getShopItemPricingGroup(itemId), "商店", itemId);
+        // 未单独指定商店周期时，保留从回收来源（或同 ID 回收项）继承周期的行为。
+        String sourceId = configManager.getShopRecycleSourceId(itemId);
+        RecyclePricingConfig cycle = resolveForRecycleItem(sourceId != null ? sourceId : itemId);
+        ConfigurationSection groupRecycle = child(group, "recycle");
+        defaults = defaults.withCycle(
+                groupRecycle != null ? groupRecycle.getDouble("cycle-period-hours", cycle.cyclePeriodHours())
+                        : cycle.cyclePeriodHours(),
+                groupRecycle != null ? groupRecycle.getDouble("cycle-amplitude", cycle.cycleAmplitude())
+                        : cycle.cycleAmplitude());
+        ConfigurationSection section = mergePricing(child(group, "shop"),
+                configManager.getShopItemPricingSection(itemId));
         if (section == null) return defaults;
 
         boolean dynamicEnabled = section.contains("dynamic-enabled")
@@ -175,8 +192,33 @@ public class PricingConfigResolver {
             antiArbitrageMultiplier,
             pricingReferenceStock,
             minSellPrice,
-            maxSellPrice
+            maxSellPrice,
+            section.getDouble("cycle-period-hours", defaults.cyclePeriodHours()),
+            section.getDouble("cycle-amplitude", defaults.cycleAmplitude())
         );
+    }
+
+    private ConfigurationSection findGroup(String groupId, String kind, String itemId) {
+        if (groupId == null || groupId.isBlank()) return null;
+        String name = groupId.trim();
+        ConfigurationSection group = configManager.getPricingGroupSection(name);
+        if (group == null && warnedGroups.add(kind + ":" + itemId + ":" + name)) {
+            logger.warning(kind + "定价配置: " + itemId + " 引用了不存在的分组 " + name
+                    + "，将使用全局默认值和物品单独配置");
+        }
+        return group;
+    }
+
+    private static ConfigurationSection child(ConfigurationSection section, String key) {
+        return section != null ? section.getConfigurationSection(key) : null;
+    }
+
+    private static ConfigurationSection mergePricing(ConfigurationSection group, ConfigurationSection item) {
+        if (group == null) return item;
+        MemoryConfiguration merged = new MemoryConfiguration();
+        group.getValues(false).forEach(merged::set);
+        if (item != null) item.getValues(false).forEach(merged::set);
+        return merged;
     }
 
     private Double optionalDouble(ConfigurationSection section, String key, Double fallback) {

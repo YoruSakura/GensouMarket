@@ -127,8 +127,10 @@ public class AuctionManager {
 
             Bukkit.getScheduler().runTask(plugin, () -> {
                 if (seller.isOnline()) {
-                    String feeMsg = listingFee > 0
-                            ? "，手续费: &e" + MessageUtil.formatMoney(listingFee) + "&a(不退还)"
+                    String feeMsg = totalUpfront > 0
+                            ? "，上架费用: &e" + MessageUtil.formatMoney(totalUpfront)
+                            + "&a(上架税: &e" + MessageUtil.formatMoney(tax)
+                            + "&a，拍卖手续费: &e" + MessageUtil.formatMoney(listingFee) + "&a，不退还)"
                             : "";
                     MessageUtil.send(seller, "&a成功发起拍卖！ID: &e" + id +
                             "&a，起拍价: &e" + MessageUtil.formatMoney(startingPrice) +

@@ -2,6 +2,7 @@ package net.scarletphantasy.gensouMarket.shop;
 
 import net.scarletphantasy.gensouMarket.GensouMarket;
 import net.scarletphantasy.gensouMarket.config.ConfigManager;
+import net.scarletphantasy.gensouMarket.model.RecycleItem;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -35,9 +36,12 @@ class RecycleEscrowTest {
         when(first.clone()).thenReturn(firstCopy);
         when(second.clone()).thenReturn(secondCopy);
         when(inventory.getContents()).thenReturn(new ItemStack[]{first, second});
-        var method = RecycleManager.class.getDeclaredMethod("removeMaterial", Player.class, Material.class, int.class);
+        var definition = mock(RecycleItem.class);
+        when(definition.matches(first)).thenReturn(true);
+        when(definition.matches(second)).thenReturn(true);
+        var method = RecycleManager.class.getDeclaredMethod("removeMatching", Player.class, RecycleItem.class, int.class);
         method.setAccessible(true);
-        @SuppressWarnings("unchecked") var removed = (List<ItemStack>) method.invoke(manager, player, Material.SHULKER_BOX, 4);
+        @SuppressWarnings("unchecked") var removed = (List<ItemStack>) method.invoke(manager, player, definition, 4);
         assertEquals(List.of(firstCopy, secondCopy), removed);
         verify(firstCopy).setAmount(2);
         verify(secondCopy).setAmount(2);

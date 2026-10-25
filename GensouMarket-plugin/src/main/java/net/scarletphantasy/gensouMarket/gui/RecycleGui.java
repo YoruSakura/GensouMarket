@@ -94,10 +94,10 @@ public final class RecycleGui {
     }
 
     static ItemStack buildDisplayItem(GensouMarket plugin, Player player, RecycleItem recycleItem) {
-        ItemStack display = new ItemStack(recycleItem.getMaterial());
+        ItemStack display = recycleItem.createItemStack(1);
         ItemMeta meta = display.getItemMeta();
         if (meta != null) {
-            meta.displayName(ItemNameUtil.getLocalizedName(recycleItem.getMaterial()));
+            if (!meta.hasDisplayName()) meta.displayName(ItemNameUtil.getLocalizedName(recycleItem.getMaterial()));
             meta.lore(buildLore(plugin, player, recycleItem));
             display.setItemMeta(meta);
         }
@@ -106,6 +106,9 @@ public final class RecycleGui {
 
     private static List<Component> buildLore(GensouMarket plugin, Player player, RecycleItem recycleItem) {
         List<Component> lore = new ArrayList<>();
+        ItemMeta original = recycleItem.createItemStack(1).getItemMeta();
+        if (original != null && original.hasLore()) lore.addAll(original.lore());
+        lore.add(LEGACY.deserialize("&7物品ID: &f" + recycleItem.getId()));
         lore.add(Component.empty());
 
         PriceContext ctx = buildRecyclePriceContext(plugin, recycleItem);
@@ -136,12 +139,7 @@ public final class RecycleGui {
         }
 
         // 批量预览（玩家背包数量或64）
-        int available = 0;
-        for (ItemStack item : player.getInventory().getContents()) {
-            if (item != null && item.getType() == recycleItem.getMaterial()) {
-                available += item.getAmount();
-            }
-        }
+        int available = plugin.getRecycleManager().countMatching(player, recycleItem);
         int batchAmount = Math.min(64, available);
         if (batchAmount > 0) {
             PriceResult batchResult = engine.calculateBatchRecyclePrice(recycleItem, ctx, batchAmount);

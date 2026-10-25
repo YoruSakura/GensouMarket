@@ -64,13 +64,21 @@ public final class ShopGui {
             int stock = shopManager.computeAvailableStock(shopItem);
             boolean outOfStock = stock <= 0;
 
-            ItemStack display = new ItemStack(shopItem.getMaterial());
+            ItemStack display = shopItem.isRecycled() && shopManager.resolveRecycleSource(shopItem) == null
+                    ? shopItem.createItemStack(1) : shopManager.createSaleItem(shopItem, 1);
             ItemMeta meta = display.getItemMeta();
             if (meta != null) {
-                meta.displayName(ItemNameUtil.getLocalizedName(shopItem.getMaterial()));
+                if (!meta.hasDisplayName()) meta.displayName(ItemNameUtil.getLocalizedName(display.getType()));
                 List<Component> lore = new ArrayList<>();
+                if (meta.hasLore()) lore.addAll(meta.lore());
+                lore.add(LEGACY.deserialize("&7物品ID: &f" + shopItem.getId()));
                 lore.add(Component.empty());
                 lore.addAll(buildModeLore(shopItem, shopManager, result, price, stock, outOfStock));
+                if (stock >= 64) {
+                    PriceResult batch = shopManager.computePurchasePriceResult(shopItem, 64);
+                    lore.add(LEGACY.deserialize("&764个合计: &e" + MessageUtil.formatMoney(batch.totalPrice())
+                            + " &7(均价: " + MessageUtil.formatMoney(batch.averagePrice()) + ")"));
+                }
                 lore.add(Component.empty());
                 if (outOfStock) {
                     lore.add(LEGACY.deserialize("&c&l缺货中"));

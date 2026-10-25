@@ -88,9 +88,9 @@ public class RecycleManager {
         return recycleItems;
     }
 
-    public RecycleItem getItemByMaterial(Material material) {
+    public RecycleItem getItemForStack(ItemStack stack) {
         for (RecycleItem item : recycleItems.values()) {
-            if (item.getMaterial() == material) return item;
+            if (item.matches(stack)) return item;
         }
         return null;
     }
@@ -121,8 +121,12 @@ public class RecycleManager {
             return false;
         }
 
-        Material material = recycleItem.getMaterial();
-        int available = countMaterial(player, material);
+        if (recycleItems.get(recycleItem.getId()) != recycleItem) {
+            MessageUtil.send(player, "&c该回收配置已变更，请重新打开回收站！");
+            return false;
+        }
+
+        int available = countMatching(player, recycleItem);
         if (available <= 0) {
             MessageUtil.send(player, "&c你的背包中没有该物品！");
             return false;
@@ -165,13 +169,13 @@ public class RecycleManager {
                 return false;
             }
 
-            if (countMaterial(player, material) < finalAmount) {
+            if (countMatching(player, recycleItem) < finalAmount) {
                 pendingClusterRecycles.remove(playerUuid);
                 MessageUtil.send(player, "&c回收操作已取消：物品数量发生变化，请重新打开回收站。");
                 return false;
             }
 
-            List<ItemStack> removedItems = removeMaterial(player, material, finalAmount);
+            List<ItemStack> removedItems = removeMatching(player, recycleItem, finalAmount);
             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
                 boolean dbSuccess = storage.addRecycleStockDelta(recycleItem, finalAmount, finalAmount, now);
                 Bukkit.getScheduler().runTask(plugin, () -> {
@@ -226,7 +230,7 @@ public class RecycleManager {
             }
 
             // 6. 移除玩家物品
-            removeMaterial(player, material, amount);
+            removeMatching(player, recycleItem, amount);
 
             // 7. 写入压力窗口（入账和移除成功后才写入）
             pressureWindow.recordRecycle(recycleItem.getId(), pricingConfig, amount, now);
@@ -249,7 +253,7 @@ public class RecycleManager {
                                     double totalEarning, PriceResult result) {
         MessageUtil.send(player, Component.text("成功回收 ", NamedTextColor.GREEN)
                 .append(Component.text(amount + "x ", NamedTextColor.YELLOW))
-                .append(ItemNameUtil.getLocalizedName(recycleItem.getMaterial()).color(NamedTextColor.YELLOW))
+                .append(ItemNameUtil.getLocalizedName(recycleItem.createItemStack(1)).color(NamedTextColor.YELLOW))
                 .append(Component.text(" 获得: ", NamedTextColor.GREEN))
                 .append(Component.text(MessageUtil.formatMoney(totalEarning), NamedTextColor.YELLOW))
                 .append(Component.text(" (均价: ", NamedTextColor.GREEN))
@@ -326,23 +330,23 @@ public class RecycleManager {
         });
     }
 
-    private int countMaterial(Player player, Material material) {
+    public int countMatching(Player player, RecycleItem definition) {
         int count = 0;
         for (ItemStack item : player.getInventory().getContents()) {
-            if (item != null && item.getType() == material) {
+            if (definition.matches(item)) {
                 count += item.getAmount();
             }
         }
         return count;
     }
 
-    private List<ItemStack> removeMaterial(Player player, Material material, int amount) {
+    private List<ItemStack> removeMatching(Player player, RecycleItem definition, int amount) {
         ItemStack[] contents = player.getInventory().getContents();
         List<ItemStack> removed = new ArrayList<>();
         int remaining = amount;
         for (int i = 0; i < contents.length && remaining > 0; i++) {
             ItemStack item = contents[i];
-            if (item != null && item.getType() == material) {
+            if (definition.matches(item)) {
                 int taken = Math.min(item.getAmount(), remaining);
                 ItemStack original = item.clone();
                 original.setAmount(taken);
@@ -436,10 +440,23 @@ public class RecycleManager {
     }
 
     public boolean addItem(String id, Material material, double recyclePrice) {
-        if (recycleItems.containsKey(id)) return false;
+        return addItem(id, material, null, recyclePrice, null);
+    }
+
+    public boolean addItem(String id, ItemStack template, double recyclePrice, String group) {
+        if (template == null || template.getType().isAir()) return false;
+        if (getItemForStack(template) != null) return false;
+        return addItem(id, template.getType(), template, recyclePrice, group);
+    }
+
+    private boolean addItem(String id, Material material, ItemStack template, double recyclePrice, String group) {
+        if (!net.scarletphantasy.gensouMarket.config.PricingGroupStore.validId(id)
+                || !Double.isFinite(recyclePrice) || recyclePrice <= 0) return false;
+        if (recycleItems.containsKey(id) || config.hasRecycleItem(id)) return false;
+        if (!config.saveRecycleItem(id, material, template, recyclePrice, group)) return false;
         RecycleItem item = new RecycleItem(id, material, recyclePrice);
+        if (template != null) item.setItemTemplate(template);
         recycleItems.put(id, item);
-        config.saveRecycleItem(id, material, recyclePrice);
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             if (plugin.isClusterEnabled()) {
                 storage.saveRecycleDefinitionData(item);
@@ -459,9 +476,9 @@ public class RecycleManager {
 
     public boolean setPrice(String id, double recyclePrice) {
         RecycleItem item = recycleItems.get(id);
-        if (item == null) return false;
+        if (item == null || !Double.isFinite(recyclePrice) || recyclePrice <= 0) return false;
+        if (!config.updateRecyclePrice(id, recyclePrice)) return false;
         item.setBaseRecyclePrice(recyclePrice);
-        config.saveRecycleItem(id, item.getMaterial(), recyclePrice);
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             if (plugin.isClusterEnabled()) {
                 storage.saveRecycleDefinitionData(item);

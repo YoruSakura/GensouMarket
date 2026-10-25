@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'net.scarletphantasy'
-version = '1.2.3'
+version = '1.2.4'
 
 def targetJavaVersion = 21
 def paperBaselineApiVersion = providers.gradleProperty("paperBaselineApiVersion")

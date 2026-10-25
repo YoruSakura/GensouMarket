@@ -29,13 +29,17 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Locale;
+import net.scarletphantasy.gensouMarket.config.PricingGroupStore;
 
 public class CommandManager implements TabExecutor {
 
     private final GensouMarket plugin;
+    private final PricingGroupCommand groupCommand;
 
     public CommandManager(GensouMarket plugin) {
         this.plugin = plugin;
+        this.groupCommand = new PricingGroupCommand(plugin);
     }
 
     @Override
@@ -62,6 +66,7 @@ public class CommandManager implements TabExecutor {
             case "bid" -> { if (requireAuction(sender)) handleBid(sender, args); }
             case "shop" -> { if (requireShop(sender)) handleShop(sender, args); }
             case "recycle" -> { if (requireRecycle(sender)) handleRecycle(sender, args); }
+            case "group" -> groupCommand.execute(sender, args);
             case "trade" -> { if (requireTrade(sender)) handleTradeCommand(sender, args); }
             case "collect" -> handleCollect(sender);
             case "reload" -> handleReload(sender);
@@ -410,10 +415,11 @@ public class CommandManager implements TabExecutor {
             }
             case "prices" -> showShopPrices(player);
             case "add" -> handleShopAdd(player, args);
+            case "addhand" -> handleAddHand(player, args, true);
             case "remove" -> handleShopRemove(player, args);
             case "setprice" -> handleShopSetPrice(player, args);
             case "setstock" -> handleShopSetStock(player, args);
-            default -> MessageUtil.send(player, "&c未知子命令！用法: shop [buy|prices|add|remove|setprice|setstock]");
+            default -> MessageUtil.send(player, "&c未知子命令！用法: shop [buy|prices|add|addhand|remove|setprice|setstock]");
         }
     }
 
@@ -439,14 +445,15 @@ public class CommandManager implements TabExecutor {
                     MessageUtil.send(player, "&c请手持要回收的物品！");
                     return;
                 }
-                RecycleItem recycleItem = plugin.getRecycleManager().getItemByMaterial(handItem.getType());
+                RecycleItem recycleItem = plugin.getRecycleManager().getItemForStack(handItem);
                 plugin.getRecycleManager().recycleItem(player, recycleItem, amount);
             }
             case "prices" -> showRecyclePrices(player);
             case "add" -> handleRecycleAdd(player, args);
+            case "addhand" -> handleAddHand(player, args, false);
             case "remove" -> handleRecycleRemove(player, args);
             case "setprice" -> handleRecycleSetPrice(player, args);
-            default -> MessageUtil.send(player, "&c未知子命令！用法: recycle [sell|prices|add|remove|setprice]");
+            default -> MessageUtil.send(player, "&c未知子命令！用法: recycle [sell|prices|add|addhand|remove|setprice]");
         }
     }
 
@@ -640,6 +647,7 @@ public class CommandManager implements TabExecutor {
         if (cm.isShopEnabled() && sender.hasPermission("gensoumarket.admin.shop.edit")) {
             MessageUtil.sendNoPrefix(sender, "&c/gmarket shop add <价格> &f- 手持物品添加商品");
             MessageUtil.sendNoPrefix(sender, "&c/gmarket shop add <物品> <价格> &f- 指定物品添加商品");
+            MessageUtil.sendNoPrefix(sender, "&c/gmarket shop addhand <物品ID> <价格> [组] &f- 保存手持物品的完整数据");
             MessageUtil.sendNoPrefix(sender, "&c/gmarket shop remove <物品ID> &f- 移除商品");
             MessageUtil.sendNoPrefix(sender, "&c/gmarket shop setprice <物品ID> <买入价> &f- 修改价格(仅 fixed 模式)");
             MessageUtil.sendNoPrefix(sender, "&c/gmarket shop setstock <物品ID> <数量> &f- 设置库存(仅 fixed+limited)");
@@ -647,20 +655,26 @@ public class CommandManager implements TabExecutor {
         if (cm.isRecycleEnabled() && sender.hasPermission("gensoumarket.admin.recycle.edit")) {
             MessageUtil.sendNoPrefix(sender, "&c/gmarket recycle add <回收价> &f- 手持物品添加回收");
             MessageUtil.sendNoPrefix(sender, "&c/gmarket recycle add <物品> <回收价> &f- 指定物品添加回收");
+            MessageUtil.sendNoPrefix(sender, "&c/gmarket recycle addhand <物品ID> <价格> [组] &f- 保存手持物品的完整数据");
             MessageUtil.sendNoPrefix(sender, "&c/gmarket recycle remove <物品ID> &f- 移除回收物品");
             MessageUtil.sendNoPrefix(sender, "&c/gmarket recycle setprice <物品ID> <回收价> &f- 修改回收价格");
+        }
+        if (cm.isPricingGroupsEnabled() && sender.hasPermission(PricingGroupCommand.PERMISSION)) {
+            MessageUtil.sendNoPrefix(sender, "&c/gmarket group &f- 管理定价分组、参数和组内物品");
         }
     }
 
     private MaterialAndPrice parseMaterialAndPrice(Player player, String[] args) {
         Material material;
         double price;
+        ItemStack template = null;
         if (args.length == 3) {
             ItemStack handItem = player.getInventory().getItemInMainHand();
             if (handItem.getType().isAir()) {
                 return null;
             }
             material = handItem.getType();
+            template = handItem;
             try {
                 price = Double.parseDouble(args[2]);
             } catch (NumberFormatException e) {
@@ -680,10 +694,45 @@ public class CommandManager implements TabExecutor {
                 return null;
             }
         }
-        return new MaterialAndPrice(material, price);
+        return new MaterialAndPrice(material, price, template);
     }
 
-    private record MaterialAndPrice(Material material, double price) {
+    private record MaterialAndPrice(Material material, double price, ItemStack template) {
+    }
+
+    private void handleAddHand(Player player, String[] args, boolean isShop) {
+        String module = isShop ? "shop" : "recycle";
+        if (!player.hasPermission("gensoumarket.admin." + module + ".edit")) {
+            MessageUtil.send(player, "&c你没有权限执行此命令！");
+            return;
+        }
+        if (args.length < 4 || args.length > 5) {
+            MessageUtil.send(player, "&c用法: /gmarket " + module + " addhand <物品ID> <基础价格> [组]");
+            return;
+        }
+        String id = args[2].toLowerCase(Locale.ROOT);
+        if (!PricingGroupStore.validId(id)) {
+            MessageUtil.send(player, "&cID 只能使用小写字母、数字、下划线和短横线，最多 64 个字符。");
+            return;
+        }
+        ItemStack hand = player.getInventory().getItemInMainHand();
+        if (hand.getType().isAir()) { MessageUtil.send(player, "&c请手持要添加的物品！"); return; }
+        String group = args.length == 5 ? args[4].toLowerCase(Locale.ROOT) : null;
+        if (group != null && (!player.hasPermission(PricingGroupCommand.PERMISSION)
+                || !plugin.getConfigManager().isPricingGroupsEnabled()
+                || plugin.getConfigManager().getPricingGroupSection(group) == null)) {
+            MessageUtil.send(player, "&c分组未启用、未找到该组，或你没有管理组的权限。");
+            return;
+        }
+        try {
+            double price = PricingGroupCommand.positivePrice(args[3]);
+            boolean added = isShop ? plugin.getShopManager().addItem(id, hand, price, group)
+                    : plugin.getRecycleManager().addItem(id, hand, price, group);
+            MessageUtil.send(player, added ? "&a已保存手持物品的完整数据，物品ID: &e" + id
+                    : "&c添加失败：同款物品或 ID 已存在，或配置保存失败；请查看日志。");
+        } catch (IllegalArgumentException ex) {
+            MessageUtil.send(player, "&c" + ex.getMessage());
+        }
     }
 
     private void handleShopAdd(Player player, String[] args) {
@@ -705,11 +754,14 @@ public class CommandManager implements TabExecutor {
         }
 
         String itemId = parsed.material().name().toLowerCase();
-        if (plugin.getShopManager().addItem(itemId, parsed.material(), parsed.price())) {
+        boolean added = parsed.template() != null
+                ? plugin.getShopManager().addItem(itemId, parsed.template(), parsed.price(), null)
+                : plugin.getShopManager().addItem(itemId, parsed.material(), parsed.price());
+        if (added) {
             MessageUtil.send(player, "&a成功添加商品: &e" + itemId + " &a(" + parsed.material().name()
                     + ") 价格: &e" + MessageUtil.formatMoney(parsed.price()));
         } else {
-            MessageUtil.send(player, "&c该物品已存在！");
+            MessageUtil.send(player, "&c添加失败：同款物品或 ID 已存在、价格无效或保存失败；自定义 ID 请使用 shop addhand。");
         }
     }
 
@@ -822,11 +874,14 @@ public class CommandManager implements TabExecutor {
         }
 
         String itemId = parsed.material().name().toLowerCase();
-        if (plugin.getRecycleManager().addItem(itemId, parsed.material(), parsed.price())) {
+        boolean added = parsed.template() != null
+                ? plugin.getRecycleManager().addItem(itemId, parsed.template(), parsed.price(), null)
+                : plugin.getRecycleManager().addItem(itemId, parsed.material(), parsed.price());
+        if (added) {
             MessageUtil.send(player, "&a成功添加回收物品: &e" + itemId + " &a(" + parsed.material().name()
                     + ") 回收价: &e" + MessageUtil.formatMoney(parsed.price()));
         } else {
-            MessageUtil.send(player, "&c该物品已存在！");
+            MessageUtil.send(player, "&c添加失败：同款物品或 ID 已存在、价格无效或保存失败；自定义 ID 请使用 recycle addhand。");
         }
     }
 
@@ -879,7 +934,10 @@ public class CommandManager implements TabExecutor {
         MessageUtil.send(player, "&6=== 服务器商店价格 ===");
         for (ShopItem item : items.values()) {
             double price = plugin.getShopManager().computeCurrentPrice(item);
-            MessageUtil.sendNoPrefix(player, ItemNameUtil.getLocalizedName(item.getMaterial())
+            ItemStack display = item.isRecycled() && plugin.getShopManager().resolveRecycleSource(item) == null
+                    ? item.createItemStack(1) : plugin.getShopManager().createSaleItem(item, 1);
+            MessageUtil.sendNoPrefix(player, ItemNameUtil.getLocalizedName(display)
+                    .append(Component.text(" [" + item.getId() + "]", NamedTextColor.GRAY))
                     .append(Component.text(" 购买: ", NamedTextColor.GREEN))
                     .append(Component.text(MessageUtil.formatMoney(price), NamedTextColor.YELLOW)));
         }
@@ -896,7 +954,8 @@ public class CommandManager implements TabExecutor {
             var engine = plugin.getRecycleManager().getPriceEngine();
             var ctx = net.scarletphantasy.gensouMarket.gui.RecycleGui.buildRecyclePriceContext(plugin, item);
             var result = engine.calculateRecyclePrice(item, ctx);
-            MessageUtil.sendNoPrefix(player, ItemNameUtil.getLocalizedName(item.getMaterial())
+            MessageUtil.sendNoPrefix(player, ItemNameUtil.getLocalizedName(item.createItemStack(1))
+                    .append(Component.text(" [" + item.getId() + "]", NamedTextColor.GRAY))
                     .append(Component.text(" 回收: ", NamedTextColor.RED))
                     .append(Component.text(MessageUtil.formatMoney(result.unitPrice()), NamedTextColor.YELLOW)));
         }
@@ -913,10 +972,11 @@ public class CommandManager implements TabExecutor {
     @Override
     public @NotNull List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
                                                @NotNull String alias, @NotNull String @NotNull [] args) {
+        if (args.length > 1 && args[0].equalsIgnoreCase("group")) return groupCommand.complete(sender, args);
+        var cm = plugin.getConfigManager();
         List<String> completions = new ArrayList<>();
 
         if (args.length == 1) {
-            var cm = plugin.getConfigManager();
             List<String> subs = new ArrayList<>();
             if (cm.isMarketEnabled()) {
                 subs.add("sell"); subs.add("cancel"); subs.add("buy");
@@ -926,6 +986,7 @@ public class CommandManager implements TabExecutor {
             if (cm.isAuctionEnabled()) { subs.add("auction"); subs.add("bid"); }
             if (cm.isShopEnabled()) subs.add("shop");
             if (cm.isRecycleEnabled()) subs.add("recycle");
+            if (cm.isPricingGroupsEnabled() && sender.hasPermission(PricingGroupCommand.PERMISSION)) subs.add("group");
             if (cm.isMailEnabled()) subs.add("collect");
             if (cm.isTradeEnabled()) subs.add("trade");
             subs.add("help");
@@ -957,7 +1018,7 @@ public class CommandManager implements TabExecutor {
                 case "shop" -> {
                     List<String> shopSubs = new ArrayList<>(List.of("buy", "prices"));
                     if (sender.hasPermission("gensoumarket.admin.shop.edit")) {
-                        shopSubs.addAll(List.of("add", "remove", "setprice", "setstock"));
+                        shopSubs.addAll(List.of("add", "addhand", "remove", "setprice", "setstock"));
                     }
                     for (String value : shopSubs) {
                         if (value.startsWith(args[1].toLowerCase())) {
@@ -968,7 +1029,7 @@ public class CommandManager implements TabExecutor {
                 case "recycle" -> {
                     List<String> recycleSubs = new ArrayList<>(List.of("sell", "prices"));
                     if (sender.hasPermission("gensoumarket.admin.recycle.edit")) {
-                        recycleSubs.addAll(List.of("add", "remove", "setprice"));
+                        recycleSubs.addAll(List.of("add", "addhand", "remove", "setprice"));
                     }
                     for (String value : recycleSubs) {
                         if (value.startsWith(args[1].toLowerCase())) {
@@ -987,6 +1048,10 @@ public class CommandManager implements TabExecutor {
                 default -> {
                 }
             }
+        } else if (args.length == 5 && args[1].equalsIgnoreCase("addhand")
+                && (args[0].equalsIgnoreCase("shop") || args[0].equalsIgnoreCase("recycle"))
+                && sender.hasPermission(PricingGroupCommand.PERMISSION) && cm.isPricingGroupsEnabled()) {
+            return cm.getPricingGroups().ids().stream().filter(id -> id.startsWith(args[4].toLowerCase(Locale.ROOT))).toList();
         } else if (args.length == 3) {
             String mainCmd = args[0].toLowerCase();
             String subCmd = args[1].toLowerCase();

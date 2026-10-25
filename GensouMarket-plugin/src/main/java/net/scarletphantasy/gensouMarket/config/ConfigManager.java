@@ -8,6 +8,9 @@ import net.scarletphantasy.gensouMarket.GensouMarket;
 import net.scarletphantasy.gensouMarket.model.RecycleItem;
 import net.scarletphantasy.gensouMarket.model.ShopItem;
 import net.scarletphantasy.gensouMarket.util.ConfigMigrator;
+import net.scarletphantasy.gensouMarket.util.ConfigFiles;
+import net.scarletphantasy.gensouMarket.util.ItemTemplates;
+import org.bukkit.inventory.ItemStack;
 
 import java.io.File;
 import java.io.IOException;
@@ -16,6 +19,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 public class ConfigManager {
 
@@ -23,9 +27,12 @@ public class ConfigManager {
     private FileConfiguration config;
     private FileConfiguration shopConfig;
     private FileConfiguration recycleConfig;
+    private final PricingGroupStore pricingGroups;
 
     public ConfigManager(GensouMarket plugin) {
         this.plugin = plugin;
+        this.pricingGroups = new PricingGroupStore(new File(plugin.getDataFolder(), "pricing-groups").toPath(),
+                plugin.getLogger());
     }
 
     public void load() {
@@ -41,6 +48,7 @@ public class ConfigManager {
 
         plugin.reloadConfig();
         config = plugin.getConfig();
+        pricingGroups.load(isPricingGroupsEnabled());
 
         // shop.yml 不做结构迁移（内容由管理员管理），仅确保文件存在
         File shopFile = new File(plugin.getDataFolder(), "shop.yml");
@@ -134,7 +142,9 @@ public class ConfigManager {
             config.getDouble("dynamic-pricing.shop.anti-arbitrage-multiplier", 1.15),
             null,
             null,
-            null
+            null,
+            config.getDouble("dynamic-pricing.recycle.cycle-period-hours", 24),
+            config.getDouble("dynamic-pricing.recycle.cycle-amplitude", 0.20)
         );
     }
 
@@ -177,6 +187,45 @@ public class ConfigManager {
         return shopConfig.getConfigurationSection("items." + itemId + ".pricing");
     }
 
+    public String getRecycleItemPricingGroup(String itemId) {
+        return isPricingGroupsEnabled() ? recycleConfig.getString("items." + itemId + ".pricing-group") : null;
+    }
+
+    public String getShopItemPricingGroup(String itemId) {
+        return isPricingGroupsEnabled() ? shopConfig.getString("items." + itemId + ".pricing-group") : null;
+    }
+
+    public ConfigurationSection getPricingGroupSection(String groupId) {
+        return isPricingGroupsEnabled() ? pricingGroups.get(groupId) : null;
+    }
+
+    public boolean isPricingGroupsEnabled() { return config.getBoolean("dynamic-pricing.groups-enabled", true); }
+    public PricingGroupStore getPricingGroups() { return pricingGroups; }
+    public boolean hasShopItem(String id) { return shopConfig.isConfigurationSection("items." + id); }
+    public boolean hasRecycleItem(String id) { return recycleConfig.isConfigurationSection("items." + id); }
+
+    public List<String> getGroupItemIds(String module, String group) {
+        FileConfiguration source = module.equals("shop") ? shopConfig : recycleConfig;
+        ConfigurationSection items = source.getConfigurationSection("items");
+        if (items == null) return List.of();
+        return items.getKeys(false).stream().filter(id ->
+                group.equals(items.getString(id + ".pricing-group", "").trim())).sorted().toList();
+    }
+
+    public boolean setItemPricingGroup(String module, String itemId, String group) {
+        boolean isShop = module.equals("shop");
+        FileConfiguration source = isShop ? shopConfig : recycleConfig;
+        if (!source.isConfigurationSection("items." + itemId)) return false;
+        if (group != null && pricingGroups.get(group) == null) return false;
+        return editItem(isShop, itemId, section -> section.set("pricing-group", group));
+    }
+
+    public String getShopRecycleSourceId(String itemId) {
+        String path = "items." + itemId;
+        return "recycled".equalsIgnoreCase(shopConfig.getString(path + ".mode", "fixed"))
+                ? shopConfig.getString(path + ".recycle-source") : null;
+    }
+
     // ---- Trade ----
     public boolean isTradeEnabled() { return config.getBoolean("trade.enabled", true); }
     public int getTradeRequestTimeout() { return config.getInt("trade.request-timeout", 30); }
@@ -214,6 +263,14 @@ public class ConfigManager {
 
             double buyPrice = itemSec.getDouble("buy-price", 0);
             ShopItem item = new ShopItem(key, material, buyPrice);
+            try {
+                ItemStack template = readTemplate(itemSec, material);
+                if (template != null) item.setItemTemplate(template);
+            } catch (RuntimeException ex) {
+                plugin.getLogger().log(java.util.logging.Level.WARNING,
+                        "商店物品数据无法读取，已跳过 " + key + "（不会降级为普通物品）", ex);
+                continue;
+            }
 
             if (itemSec.contains("sell-value")) {
                 item.setSellValue(itemSec.getDouble("sell-value"));
@@ -286,19 +343,34 @@ public class ConfigManager {
             }
 
             double recyclePrice = itemSec.getDouble("recycle-price", 0);
-            items.put(key, new RecycleItem(key, material, recyclePrice));
+            RecycleItem item = new RecycleItem(key, material, recyclePrice);
+            try {
+                ItemStack template = readTemplate(itemSec, material);
+                if (template != null) item.setItemTemplate(template);
+            } catch (RuntimeException ex) {
+                plugin.getLogger().log(java.util.logging.Level.WARNING,
+                        "回收物品数据无法读取，已跳过 " + key + "（不会降级为普通物品）", ex);
+                continue;
+            }
+            items.put(key, item);
         }
         return items;
     }
 
     // ---- Shop Config Persistence ----
-    public void saveShopItem(String id, Material material, double buyPrice) {
-        // 管理员 /gmarket shop add 仅创建 fixed+unlimited 商品（task-05）
-        shopConfig.set("items." + id + ".material", material.name());
-        shopConfig.set("items." + id + ".mode", "fixed");
-        shopConfig.set("items." + id + ".buy-price", buyPrice);
-        shopConfig.set("items." + id + ".stock-mode", "unlimited");
-        saveShopConfig();
+    public boolean saveShopItem(String id, Material material, double buyPrice) {
+        return saveShopItem(id, material, null, buyPrice, null);
+    }
+
+    public boolean saveShopItem(String id, Material material, ItemStack template, double buyPrice, String group) {
+        return editItem(true, id, section -> {
+            section.set("material", material.name());
+            section.set("mode", "fixed");
+            section.set("buy-price", buyPrice);
+            section.set("stock-mode", "unlimited");
+            section.set("item-data", template != null ? ItemTemplates.encode(template) : null);
+            section.set("pricing-group", group);
+        });
     }
 
     /**
@@ -309,9 +381,7 @@ public class ConfigManager {
     public boolean updateShopBuyPrice(String id, double buyPrice) {
         String path = "items." + id;
         if (!shopConfig.contains(path)) return false;
-        shopConfig.set(path + ".buy-price", buyPrice);
-        saveShopConfig();
-        return true;
+        return editItem(true, id, section -> section.set("buy-price", buyPrice));
     }
 
     public void removeShopItem(String id) {
@@ -328,10 +398,22 @@ public class ConfigManager {
     }
 
     // ---- Recycle Config Persistence ----
-    public void saveRecycleItem(String id, Material material, double recyclePrice) {
-        recycleConfig.set("items." + id + ".material", material.name());
-        recycleConfig.set("items." + id + ".recycle-price", recyclePrice);
-        saveRecycleConfig();
+    public boolean saveRecycleItem(String id, Material material, double recyclePrice) {
+        return saveRecycleItem(id, material, null, recyclePrice, null);
+    }
+
+    public boolean saveRecycleItem(String id, Material material, ItemStack template, double recyclePrice, String group) {
+        return editItem(false, id, section -> {
+            section.set("material", material.name());
+            section.set("recycle-price", recyclePrice);
+            section.set("item-data", template != null ? ItemTemplates.encode(template) : null);
+            section.set("pricing-group", group);
+        });
+    }
+
+    public boolean updateRecyclePrice(String id, double price) {
+        if (!recycleConfig.isConfigurationSection("items." + id)) return false;
+        return editItem(false, id, section -> section.set("recycle-price", price));
     }
 
     public void removeRecycleItem(String id) {
@@ -344,6 +426,37 @@ public class ConfigManager {
             recycleConfig.save(new File(plugin.getDataFolder(), "recycle.yml"));
         } catch (IOException e) {
             plugin.getLogger().log(java.util.logging.Level.SEVERE, "无法保存 recycle.yml！", e);
+        }
+    }
+
+    private static ItemStack readTemplate(ConfigurationSection section, Material material) {
+        if (!section.contains("item-data")) return null;
+        String data = section.getString("item-data");
+        if (data == null || data.isBlank()) throw new IllegalArgumentException("item-data 为空");
+        ItemStack template = ItemTemplates.decode(data);
+        if (template.getType() != material || template.getType().isAir()) {
+            throw new IllegalArgumentException("item-data 与 material 不一致，或物品为空");
+        }
+        return template;
+    }
+
+    private boolean editItem(boolean isShop, String id, Consumer<ConfigurationSection> edit) {
+        FileConfiguration source = isShop ? shopConfig : recycleConfig;
+        String name = isShop ? "shop.yml" : "recycle.yml";
+        try {
+            var updated = new YamlConfiguration();
+            updated.loadFromString(source.saveToString());
+            String path = "items." + id;
+            ConfigurationSection section = updated.getConfigurationSection(path);
+            if (section == null) section = updated.createSection(path);
+            edit.accept(section);
+            ConfigFiles.save(updated, new File(plugin.getDataFolder(), name).toPath());
+            if (isShop) shopConfig = updated;
+            else recycleConfig = updated;
+            return true;
+        } catch (Exception ex) {
+            plugin.getLogger().log(java.util.logging.Level.SEVERE, "无法保存 " + name + " 中的物品 " + id, ex);
+            return false;
         }
     }
 }

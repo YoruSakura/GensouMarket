@@ -37,7 +37,7 @@ public class PriceEngine {
      * 计算回收单价。
      *
      * @param item    回收物品（提供 baseRecyclePrice 和 itemId）
-     * @param config  已解析的回收定价配置（物品级 > 模块级）
+     * @param config  已解析的回收定价配置（物品级 > 分组 > 全局默认）
      * @param ctx     运行时上下文（时间、经济倍率、活跃量等）
      * @return 包含最终单价和中间值的 PriceResult
      */
@@ -184,6 +184,60 @@ public class PriceEngine {
         return calculateSellPrice(shopItem, recycleSource, recycleConfig, shopConfig, ctx);
     }
 
+    /**
+     * 按逐件减少后的库存计算购买总价。整单使用同一时刻、经济倍率和回收量，
+     * 每件沿用单件报价的两位小数及最低 0.01，保证拆单与合单的库存计价一致。
+     */
+    public PriceResult calculateBatchSellPrice(ShopItem shopItem, RecycleItem recycleSource,
+                                               PriceContext ctx, int amount) {
+        if (amount <= 0) throw new IllegalArgumentException("购买数量必须大于 0");
+        ShopPricingConfig shopConfig = configResolver.resolveForShopItem(shopItem.getId());
+        RecyclePricingConfig recycleConfig = recycleSource != null
+                ? configResolver.resolveForRecycleItem(recycleSource.getId()) : null;
+        PriceResult first = calculateSellPrice(shopItem, recycleSource, recycleConfig, shopConfig, ctx);
+        double firstPrice = Math.max(first.unitPrice(), 0.01);
+        boolean stockAffectsPrice = shopConfig.dynamicEnabled()
+                && (shopItem.isFixedLimited() && shopConfig.fixedDynamicEnabled()
+                || shopItem.isRecycled() && shopConfig.recycledDynamicEnabled());
+
+        double total = firstPrice * amount;
+        boolean antiArbitrageApplied = first.antiArbitrageApplied();
+        if (stockAffectsPrice && amount > 1) {
+            PriceResult last = calculateSellPrice(shopItem, recycleSource, recycleConfig,
+                    shopConfig, afterSelling(ctx, amount - 1));
+            total = sumSellPrices(shopItem, recycleSource, recycleConfig, shopConfig, ctx, amount,
+                    firstPrice, Math.max(last.unitPrice(), 0.01));
+            antiArbitrageApplied |= last.antiArbitrageApplied();
+        }
+        total = roundPrice(total);
+        return new PriceResult(firstPrice, total, roundPrice(total / amount), first.baseValue(),
+                first.cycleMultiplier(), first.pressureRatio(), first.economyMultiplier(),
+                first.stockMultiplier(), antiArbitrageApplied);
+    }
+
+    private double sumSellPrices(ShopItem item, RecycleItem source, RecyclePricingConfig recycleConfig,
+                                  ShopPricingConfig shopConfig, PriceContext ctx, int amount,
+                                  double firstPrice, double lastPrice) {
+        // 当前三种模式在固定时间和经济倍率下，售价随库存单调变化。
+        // 两端报价相同的整段可直接合并；变化区间继续二分，保留每件按分取整的结果。
+        if (amount == 1 || firstPrice == lastPrice) return firstPrice * amount;
+        int leftAmount = amount / 2;
+        PriceContext right = afterSelling(ctx, leftAmount);
+        double leftLast = Math.max(calculateSellPrice(item, source, recycleConfig, shopConfig,
+                afterSelling(ctx, leftAmount - 1)).unitPrice(), 0.01);
+        double rightFirst = Math.max(calculateSellPrice(item, source, recycleConfig,
+                shopConfig, right).unitPrice(), 0.01);
+        return sumSellPrices(item, source, recycleConfig, shopConfig, ctx, leftAmount, firstPrice, leftLast)
+                + sumSellPrices(item, source, recycleConfig, shopConfig, right,
+                amount - leftAmount, rightFirst, lastPrice);
+    }
+
+    private static PriceContext afterSelling(PriceContext ctx, int amount) {
+        return new PriceContext(ctx.nowMillis(), ctx.economyRecycleMultiplier(), ctx.economyShopMultiplier(),
+                ctx.activeVolume(), Math.max(ctx.recycledStock() - amount, 0),
+                Math.max(ctx.currentStock() - amount, 0), ctx.referenceStock());
+    }
+
     // ========== 出售内部计算 ==========
 
     /**
@@ -217,13 +271,7 @@ public class PriceEngine {
         }
 
         double cycleMultiplier = computeCycleMultiplier(shopItem.getId(), ctx.nowMillis(),
-                configResolver.resolveForRecycleItem(shopItem.getId()).cyclePeriodHours(),
-                configResolver.resolveForRecycleItem(shopItem.getId()).cycleAmplitude());
-        // 对于没有关联 recycleItem 的 shop item，使用全局默认周期参数
-        // 实际上 fixed 商品的周期来自 recycle 全局配置，因为 01 总览写 "共用基础概念"
-        RecyclePricingConfig rcfg = configResolver.resolveForRecycleItem(shopItem.getId());
-        cycleMultiplier = computeCycleMultiplier(shopItem.getId(), ctx.nowMillis(),
-                rcfg.cyclePeriodHours(), rcfg.cycleAmplitude());
+                shopConfig.cyclePeriodHours(), shopConfig.cycleAmplitude());
 
         double rawPrice = sellBaseValue * cycleMultiplier * ctx.economyShopMultiplier();
 
@@ -250,9 +298,8 @@ public class PriceEngine {
         double cycleMultiplier = 1.0;
         double stockMultiplier = 1.0;
 
-        RecyclePricingConfig rcfg = configResolver.resolveForRecycleItem(shopItem.getId());
         cycleMultiplier = computeCycleMultiplier(shopItem.getId(), ctx.nowMillis(),
-                rcfg.cyclePeriodHours(), rcfg.cycleAmplitude());
+                shopConfig.cyclePeriodHours(), shopConfig.cycleAmplitude());
 
         // 库存稀缺度
         int refStock = shopConfig.pricingReferenceStock() != null
@@ -288,12 +335,8 @@ public class PriceEngine {
         boolean antiArbitrageApplied = false;
 
         if (dynamicEnabled) {
-            // 周期波动（与回收共用同一周期参数）
-            RecyclePricingConfig rcfg = recycleConfig != null
-                    ? recycleConfig
-                    : configResolver.resolveForRecycleItem(recycleSource != null ? recycleSource.getId() : shopItem.getId());
             cycleMultiplier = computeCycleMultiplier(shopItem.getId(), ctx.nowMillis(),
-                    rcfg.cyclePeriodHours(), rcfg.cycleAmplitude());
+                    shopConfig.cyclePeriodHours(), shopConfig.cycleAmplitude());
 
             // 回流库存倍率
             int targetStock = shopConfig.targetRecycledStock();

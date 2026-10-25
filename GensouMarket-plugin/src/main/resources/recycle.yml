@@ -8,6 +8,13 @@
 #   物品ID:
 #     material: Bukkit Material 名称
 #     recycle-price: 基础回收价格
+#     pricing-group: farm  # 可选，对应 pricing-groups/farm.yml
+#     pricing:             # 可选，覆盖分组与全局默认中的同名参数
+#       cycle-amplitude: 0.10
+# 分组 recycle 支持与单件 pricing 相同的参数；同组物品各自统计回收量。
+# 自定义物品请用 /gmarket recycle addhand <物品ID> <价格> [组] 手持添加。
+# item-data 由插件自动保存，包含完整物品数据；匹配时只忽略数量。
+# 只写 material 的配置匹配普通物品，不会回收带额外组件/标签的同材质物品。
 
 items:
   diamond:

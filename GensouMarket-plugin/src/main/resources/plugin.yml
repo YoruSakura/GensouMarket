@@ -52,3 +52,6 @@ permissions:
   gensoumarket.admin.recycle.edit:
     description: 编辑回收站物品
     default: op
+  gensoumarket.admin.group:
+    description: 管理动态定价分组及分组参数
+    default: op

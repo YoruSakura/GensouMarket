@@ -4,6 +4,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Material;
+import org.bukkit.inventory.ItemStack;
 
 /**
  * 物品名称本地化工具。
@@ -20,5 +21,10 @@ public final class ItemNameUtil {
         return Component.translatable(material.translationKey())
                 .color(NamedTextColor.WHITE)
                 .decoration(TextDecoration.ITALIC, false);
+    }
+
+    public static Component getLocalizedName(ItemStack stack) {
+        var meta = stack.getItemMeta();
+        return meta != null && meta.hasDisplayName() ? meta.displayName() : getLocalizedName(stack.getType());
     }
 }

@@ -162,6 +162,13 @@ public class ShopManager {
         return priceEngine.calculateSellPrice(shopItem, recycleSource, ctx);
     }
 
+    public PriceResult computePurchasePriceResult(ShopItem shopItem, int amount) {
+        RecycleItem recycleSource = resolveRecycleSource(shopItem);
+        PriceContext ctx = buildSellPriceContext(shopItem, recycleSource);
+        return plugin.getRecycleManager().getPriceEngine()
+                .calculateBatchSellPrice(shopItem, recycleSource, ctx, amount);
+    }
+
     /**
      * 根据模式计算当前单价（v1.1.1 统一入口）。
      * <p>
@@ -192,6 +199,15 @@ public class ShopManager {
     public RecycleItem resolveRecycleSource(ShopItem shopItem) {
         if (!shopItem.isRecycled() || shopItem.getRecycleSourceId() == null) return null;
         return plugin.getRecycleManager().getRecycleItems().get(shopItem.getRecycleSourceId());
+    }
+
+    public ItemStack createSaleItem(ShopItem item, int amount) {
+        if (item.isRecycled()) {
+            RecycleItem source = resolveRecycleSource(item);
+            if (source == null) throw new IllegalStateException("回流商品缺少回收来源: " + item.getId());
+            return source.createItemStack(amount);
+        }
+        return item.createItemStack(amount);
     }
 
     public void buyFromShop(Player player, String itemId, int amount) {
@@ -247,9 +263,9 @@ public class ShopManager {
         }
 
         // v1.1.1 统一价格计算
-        PriceResult result = computeCurrentPriceResult(shopItem);
-        double pricePerUnit = Math.max(result.unitPrice(), 0.01);
-        double totalCost = Math.round(pricePerUnit * amount * 100.0) / 100.0;
+        PriceResult result = computePurchasePriceResult(shopItem, amount);
+        double pricePerUnit = result.averagePrice();
+        double totalCost = result.totalPrice();
 
         if (!vault.has(player, totalCost)) {
             MessageUtil.send(player, "&c你没有足够的金币！需要: &e" + MessageUtil.formatMoney(totalCost));
@@ -263,6 +279,8 @@ public class ShopManager {
             return;
         }
 
+        // 发货使用本次校验过的定义，避免异步操作期间重载/移除来源后丢失物品数据。
+        ItemStack item = shopItem.isRecycled() ? recycleSource.createItemStack(amount) : shopItem.createItemStack(amount);
         // 非跨服或非 recycled：同步流程
         if (!vault.withdraw(player, totalCost)) {
             MessageUtil.send(player, "&c扣款失败，请稍后重试购买！");
@@ -270,7 +288,6 @@ public class ShopManager {
             return;
         }
 
-        ItemStack item = new ItemStack(shopItem.getMaterial(), amount);
         java.util.HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(item);
         if (!overflow.isEmpty()) {
             for (ItemStack drop : overflow.values()) {
@@ -297,7 +314,7 @@ public class ShopManager {
                 .append(ItemNameUtil.getLocalizedName(shopItem.getMaterial()).color(NamedTextColor.YELLOW))
                 .append(Component.text(" 花费: ", NamedTextColor.GREEN))
                 .append(Component.text(MessageUtil.formatMoney(totalCost), NamedTextColor.YELLOW))
-                .append(Component.text(" (单价: ", NamedTextColor.GREEN))
+                .append(Component.text(amount > 1 ? " (平均单价: " : " (单价: ", NamedTextColor.GREEN))
                 .append(Component.text(MessageUtil.formatMoney(pricePerUnit), NamedTextColor.YELLOW))
                 .append(Component.text(")", NamedTextColor.GREEN)));
 
@@ -306,7 +323,8 @@ public class ShopManager {
 
     /** fixed+limited 使用共享数据库扣减；本地库存仅供展示和价格快照。 */
     private void buyFixedLimited(Player player, ShopItem item, int amount, Runnable onComplete) {
-        double quotedCost = Math.round(computeCurrentPrice(item) * amount * 100.0) / 100.0;
+        double quotedCost = item.getAvailableStock() >= amount
+                ? computePurchasePriceResult(item, amount).totalPrice() : 0;
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             Integer stock = storage.getShopStock(item.getId());
             Bukkit.getScheduler().runTask(plugin, () -> {
@@ -321,8 +339,7 @@ public class ShopManager {
                     return;
                 }
                 item.setAvailableStock(stock);
-                double unitPrice = computeCurrentPrice(item);
-                double cost = Math.round(unitPrice * amount * 100.0) / 100.0;
+                double cost = computePurchasePriceResult(item, amount).totalPrice();
                 if (quotedCost > 0 && Math.abs(cost - quotedCost) / quotedCost > config.getPriceChangeTolerance()) {
                     MessageUtil.send(player, "&e库存价格已变化，请刷新后重新确认购买。");
                     if (onComplete != null) onComplete.run();
@@ -358,7 +375,7 @@ public class ShopManager {
                             if (player.isOnline()) MessageUtil.send(player, "&c扣款失败，购买已取消！");
                             return;
                         }
-                        MessageUtil.giveItem(player, new ItemStack(item.getMaterial(), amount));
+                        MessageUtil.giveItem(player, item.createItemStack(amount));
                         item.addBought(amount);
                         item.setLastUpdate(System.currentTimeMillis());
                         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveShopData(item));
@@ -420,7 +437,7 @@ public class ShopManager {
                 }
 
                 // 扣款成功：发放物品
-                ItemStack item = new ItemStack(shopItem.getMaterial(), amount);
+                ItemStack item = recycleSource.createItemStack(amount);
                 java.util.HashMap<Integer, ItemStack> overflow = player.getInventory().addItem(item);
                 if (!overflow.isEmpty()) {
                     for (ItemStack drop : overflow.values()) {
@@ -444,7 +461,7 @@ public class ShopManager {
                         .append(ItemNameUtil.getLocalizedName(shopItem.getMaterial()).color(NamedTextColor.YELLOW))
                         .append(Component.text(" 花费: ", NamedTextColor.GREEN))
                         .append(Component.text(MessageUtil.formatMoney(totalCost), NamedTextColor.YELLOW))
-                        .append(Component.text(" (单价: ", NamedTextColor.GREEN))
+                        .append(Component.text(amount > 1 ? " (平均单价: " : " (单价: ", NamedTextColor.GREEN))
                         .append(Component.text(MessageUtil.formatMoney(pricePerUnit), NamedTextColor.YELLOW))
                         .append(Component.text(")", NamedTextColor.GREEN)));
 
@@ -472,13 +489,26 @@ public class ShopManager {
     }
 
     public boolean addItem(String id, Material material, double buyPrice) {
-        if (shopItems.containsKey(id)) return false;
+        return addItem(id, material, null, buyPrice, null);
+    }
+
+    public boolean addItem(String id, ItemStack template, double buyPrice, String group) {
+        if (template == null || template.getType().isAir()) return false;
+        if (shopItems.values().stream().anyMatch(item -> item.matches(template))) return false;
+        return addItem(id, template.getType(), template, buyPrice, group);
+    }
+
+    private boolean addItem(String id, Material material, ItemStack template, double buyPrice, String group) {
+        if (!net.scarletphantasy.gensouMarket.config.PricingGroupStore.validId(id)
+                || !Double.isFinite(buyPrice) || buyPrice <= 0) return false;
+        if (shopItems.containsKey(id) || config.hasShopItem(id)) return false;
+        if (!config.saveShopItem(id, material, template, buyPrice, group)) return false;
         ShopItem item = new ShopItem(id, material, buyPrice);
+        if (template != null) item.setItemTemplate(template);
         // /gmarket shop add 仅创建 fixed+unlimited 商品（task-05）
         item.setMode(ShopItem.Mode.FIXED);
         item.setStockMode(ShopItem.StockMode.UNLIMITED);
         shopItems.put(id, item);
-        config.saveShopItem(id, material, buyPrice);
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveShopData(item));
         return true;
     }
@@ -494,9 +524,9 @@ public class ShopManager {
         ShopItem item = shopItems.get(id);
         if (item == null) return false;
         if (item.isRecycled()) return false;
+        if (!Double.isFinite(buyPrice) || buyPrice <= 0 || !config.updateShopBuyPrice(id, buyPrice)) return false;
         item.setBaseBuyPrice(buyPrice);
         // 只改 buy-price，保留 mode / stock-mode / initial-stock 等原有配置
-        config.updateShopBuyPrice(id, buyPrice);
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> storage.saveShopData(item));
         return true;
     }

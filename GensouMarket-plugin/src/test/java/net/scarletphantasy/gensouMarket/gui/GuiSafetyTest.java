@@ -1,18 +1,26 @@
 package net.scarletphantasy.gensouMarket.gui;
 
 import net.scarletphantasy.gensouMarket.GensouMarket;
+import net.scarletphantasy.gensouMarket.config.ConfigManager;
+import net.scarletphantasy.gensouMarket.model.ShopItem;
+import net.scarletphantasy.gensouMarket.shop.PriceResult;
+import net.scarletphantasy.gensouMarket.shop.ShopManager;
+import net.scarletphantasy.gensouMarket.util.MessageUtil;
 import net.scarletphantasy.gensouMarket.trade.TradeManager;
 import net.scarletphantasy.gensouMarket.trade.TradeManager.TradeSession;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.junit.jupiter.api.Test;
 
 import java.util.Set;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -21,6 +29,44 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class GuiSafetyTest {
+    @Test void shopConfirmationDisplaysAndSubmitsTheBatchTotal() {
+        var plugin = mock(GensouMarket.class);
+        var manager = mock(ShopManager.class);
+        var config = mock(ConfigManager.class);
+        var player = mock(Player.class);
+        var item = new ShopItem("limited", Material.DIAMOND, 100);
+        var inventory = top(GuiHolder.GuiType.SHOP);
+        var holder = (GuiHolder) inventory.getHolder();
+        holder.setData("items", List.of(item));
+        var displayedItem = mock(ItemStack.class);
+        var displayedMaterial = mock(Material.class);
+        var event = mock(InventoryClickEvent.class);
+        when(event.getInventory()).thenReturn(inventory);
+        when(event.getWhoClicked()).thenReturn(player);
+        when(event.getCurrentItem()).thenReturn(displayedItem);
+        when(event.isShiftClick()).thenReturn(true);
+        when(displayedItem.getType()).thenReturn(displayedMaterial);
+        when(displayedMaterial.isAir()).thenReturn(false);
+        when(player.hasPermission(anyString())).thenReturn(true);
+        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+        when(plugin.getShopManager()).thenReturn(manager);
+        when(plugin.getConfigManager()).thenReturn(config);
+        when(config.getPrefix()).thenReturn("");
+        when(config.getPriceChangeTolerance()).thenReturn(0.05);
+        when(manager.computeAvailableStock(item)).thenReturn(64);
+        when(manager.computePurchasePriceResult(item, 64)).thenReturn(
+                new PriceResult(100, 7975.04, 124.61, 100, 1, 0, 1, 1, false));
+        try (var instance = mockStatic(GensouMarket.class)) {
+            instance.when(GensouMarket::getInstance).thenReturn(plugin);
+            var listener = new GuiListener(plugin);
+            listener.onInventoryClick(event);
+            verify(player).sendMessage(contains(MessageUtil.formatMoney(7975.04)));
+            verify(manager, never()).buyFromShop(any(), anyString(), anyInt(), any(Runnable.class));
+            listener.onInventoryClick(event);
+            verify(manager).buyFromShop(eq(player), eq("limited"), eq(64), any(Runnable.class));
+        }
+    }
+
     @Test void normalMenuRejectsDragsIntoTopInventory() {
         var top = top(GuiHolder.GuiType.MARKET_BROWSE);
         var event = mock(InventoryDragEvent.class);

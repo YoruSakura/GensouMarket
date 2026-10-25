@@ -1,11 +1,14 @@
 package net.scarletphantasy.gensouMarket.model;
 
 import org.bukkit.Material;
+import org.bukkit.inventory.ItemStack;
+import net.scarletphantasy.gensouMarket.util.ItemTemplates;
 
 public class RecycleItem {
 
     private final String id;
     private final Material material;
+    private ItemStack itemTemplate;
     private double baseRecyclePrice;
     private int totalRecycled;
     /** @deprecated v1.1.1 起由 PriceEngine smoothstep 压力曲线替代，仅作为旧数据兼容字段保留 */
@@ -30,6 +33,10 @@ public class RecycleItem {
     public String getId() { return id; }
 
     public Material getMaterial() { return material; }
+
+    public void setItemTemplate(ItemStack template) { itemTemplate = ItemTemplates.normalize(template); }
+    public ItemStack createItemStack(int amount) { return ItemTemplates.create(material, itemTemplate, amount); }
+    public boolean matches(ItemStack stack) { return ItemTemplates.matches(material, itemTemplate, stack); }
 
     public double getBaseRecyclePrice() { return baseRecyclePrice; }
     public void setBaseRecyclePrice(double price) { this.baseRecyclePrice = price; }

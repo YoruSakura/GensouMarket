@@ -9,6 +9,14 @@
 #   material:         Bukkit Material 名称
 #   mode:             fixed 或 recycled
 #   sell-value:       (可选) 显式指定标准售价，优先级最高。如果设置了，sell-multiplier 将被忽略。
+#   pricing-group:    (可选) 对应 pricing-groups/<组名>.yml
+#   pricing:          (可选) 覆盖分组 shop 与全局默认中的同名参数
+#                     例如 pricing: {fixed-dynamic-enabled: true, cycle-amplitude: 0.10}
+#                     fixed 商品需开启 fixed-dynamic-enabled 才会使用动态价格。
+#                     同组物品各自统计库存，不共用库存池。
+#   item-data:        由手持添加指令自动保存完整物品数据，无需手工填写。
+#                     fixed 发放保存的物品；recycled 发放回收来源的物品。
+# 手持添加并指定 ID：/gmarket shop addhand <物品ID> <价格> [组]
 #
 # mode=fixed 必须字段:
 #   buy-price:        玩家购买价格（固定/基准）

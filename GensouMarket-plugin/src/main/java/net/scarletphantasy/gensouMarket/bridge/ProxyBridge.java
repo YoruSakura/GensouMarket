@@ -7,6 +7,7 @@ import net.scarletphantasy.gensouMarket.bridge.protocol.PacketCodec;
 import net.scarletphantasy.gensouMarket.bridge.protocol.PacketType;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.messaging.MessageTooLargeException;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 
 import java.io.UncheckedIOException;
@@ -94,11 +95,12 @@ public class ProxyBridge implements PluginMessageListener {
             plugin.getLogger().fine("无法发送跨服消息（无在线玩家）: " + packet.getType());
             return false;
         }
-        byte[] data = PacketCodec.encode(packet);
         try {
+            // 编码超限时确定未发送，也必须让业务失败回调执行邮箱兜底。
+            byte[] data = PacketCodec.encode(packet);
             player.sendPluginMessage(plugin, channel, data);
             return true;
-        } catch (IllegalArgumentException e) {
+        } catch (UncheckedIOException | MessageTooLargeException | IllegalArgumentException e) {
             plugin.getLogger().log(Level.FINE, "发送跨服消息失败: " + packet.getType(), e);
             return false;
         }

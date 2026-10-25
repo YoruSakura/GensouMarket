@@ -65,6 +65,10 @@ recycle:
 # 动态价格配置 (v1.1.1: 回收价格 + 服务器商店售价均受影响)
 dynamic-pricing:
   enabled: true
+  # 是否启用定价分组。关闭后保留文件和归组记录，价格沿用单件配置及全局默认。
+  # 每组一个文件：plugins/GensouMarket/pricing-groups/<组名>.yml
+  # 游戏内用 /gmarket group 管理；修改此开关后执行 /gmarket reload。
+  groups-enabled: true
 
   # 回收价格动态调整
   recycle:
@@ -116,7 +120,9 @@ economy-balance:
   enabled: true
   # 全服余额快照间隔（分钟）
   snapshot-interval-minutes: 10
-  # 经济阶段（按 max-total 升序排列，最后一条 max-total: -1 为兜底）
+  # 经济阶段（按 max-total 升序排列，最后一条 max-total: -1 为最终固定倍率）
+  # 每档从本档倍率平滑过渡到下一档倍率；第一档下界为 0，上界为 max-total。
+  # 例如总额从 100万 增至 500万，回收倍率从 1.0 平滑降至 0.85，不再跨档跳价。
   stages:
     - max-total: 1000000
       recycle-multiplier: 1.15

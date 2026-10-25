@@ -1,6 +1,8 @@
 package net.scarletphantasy.gensouMarket.model;
 
 import org.bukkit.Material;
+import org.bukkit.inventory.ItemStack;
+import net.scarletphantasy.gensouMarket.util.ItemTemplates;
 
 public class ShopItem {
 
@@ -9,6 +11,7 @@ public class ShopItem {
 
     private final String id;
     private final Material material;
+    private ItemStack itemTemplate;
     private double baseBuyPrice;
     private int totalBought;
     private long lastUpdate;
@@ -35,6 +38,10 @@ public class ShopItem {
     public String getId() { return id; }
 
     public Material getMaterial() { return material; }
+
+    public void setItemTemplate(ItemStack template) { itemTemplate = ItemTemplates.normalize(template); }
+    public ItemStack createItemStack(int amount) { return ItemTemplates.create(material, itemTemplate, amount); }
+    public boolean matches(ItemStack stack) { return ItemTemplates.matches(material, itemTemplate, stack); }
 
     public double getBaseBuyPrice() { return baseBuyPrice; }
     public void setBaseBuyPrice(double price) { this.baseBuyPrice = price; }
